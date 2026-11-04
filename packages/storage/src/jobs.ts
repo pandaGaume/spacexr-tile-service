@@ -1,0 +1,8 @@
+import {ServiceError,sha256,type IServiceContext,type IJob} from "@spacexr-service/shared";
+import {first,sql} from "./index";
+/** Stable per-tenant operation identity when a caller supplies an idempotency key. */
+export async function jobIdentity(context:IServiceContext,kind:IJob["kind"],resourceId:string):Promise<string>{const key=context.request.headers.get("idempotency-key");if(!key)return crypto.randomUUID();if(key.length>128||!key.trim())throw new ServiceError(400,"INVALID_IDEMPOTENCY_KEY","Idempotency key must be 1..128 characters");return"job-"+(await sha256(context.principal!.tenantId+":"+kind+":"+resourceId+":"+key)).slice(0,40);}
+/** Read a previously submitted job in the current tenant boundary. */
+export async function replayJob(context:IServiceContext,id:string):Promise<{id:string;payload:Record<string,unknown>}|undefined>{const row=await first<{id:string;payload:string}>(context,"SELECT id,payload FROM jobs WHERE id=? AND tenant_id=?",id,context.principal!.tenantId);return row?{id:row.id,payload:JSON.parse(row.payload) as Record<string,unknown>}:undefined;}
+/** Allocate a monotonically increasing publication sequence. Gaps are harmless; revision objects remain immutable. */
+export async function nextPublicationSequence(context:IServiceContext,kind:"layer"|"dataset",id:string):Promise<number>{await sql(context,"INSERT OR IGNORE INTO publication_counters(kind,resource_id) VALUES(?,?)",kind,id).run();const row=await sql(context,"UPDATE publication_counters SET sequence=sequence+1 WHERE kind=? AND resource_id=? RETURNING sequence",kind,id).first<{sequence:number}>();if(!row)throw new Error("Publication counter was not allocated");return row.sequence;}

@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "$id": "IUploadInput",
+  "type": "object",
+  "required": [
+    "name",
+    "byteLength",
+    "sha256",
+    "contentType"
+  ],
+  "properties": {
+    "name": {
+      "minLength": 1,
+      "maxLength": 200,
+      "type": "string"
+    },
+    "byteLength": {
+      "minimum": 20,
+      "maximum": 67108864,
+      "type": "integer"
+    },
+    "sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "contentType": {
+      "anyOf": [
+        {
+          "const": "model/gltf-binary",
+          "type": "string"
+        },
+        {
+          "const": "model/gltf+json",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}

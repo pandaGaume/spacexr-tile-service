@@ -1,0 +1,9 @@
+{
+  "name": "@spacexr-service/tiles3d-builder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

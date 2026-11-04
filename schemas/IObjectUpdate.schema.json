@@ -1,0 +1,140 @@
+{
+  "additionalProperties": false,
+  "$id": "IObjectUpdate",
+  "type": "object",
+  "required": [
+    "version",
+    "assetId",
+    "position",
+    "orientation",
+    "scale"
+  ],
+  "properties": {
+    "version": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "assetId": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+      "type": "string"
+    },
+    "position": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "longitude",
+            "latitude",
+            "altitude",
+            "altitudeMode"
+          ],
+          "properties": {
+            "longitude": {
+              "minimum": -180,
+              "maximum": 180,
+              "type": "number"
+            },
+            "latitude": {
+              "minimum": -90,
+              "maximum": 90,
+              "type": "number"
+            },
+            "altitude": {
+              "minimum": -1000000,
+              "maximum": 1000000000,
+              "type": "number"
+            },
+            "altitudeMode": {
+              "anyOf": [
+                {
+                  "const": "absolute",
+                  "type": "string"
+                },
+                {
+                  "const": "relative-to-ground",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "x",
+            "y",
+            "z"
+          ],
+          "properties": {
+            "x": {
+              "minimum": -1000000000,
+              "maximum": 1000000000,
+              "type": "number"
+            },
+            "y": {
+              "minimum": -1000000000,
+              "maximum": 1000000000,
+              "type": "number"
+            },
+            "z": {
+              "minimum": -1000000000,
+              "maximum": 1000000000,
+              "type": "number"
+            }
+          }
+        }
+      ]
+    },
+    "orientation": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "heading",
+        "pitch",
+        "roll"
+      ],
+      "properties": {
+        "heading": {
+          "type": "number"
+        },
+        "pitch": {
+          "type": "number"
+        },
+        "roll": {
+          "type": "number"
+        }
+      }
+    },
+    "scale": {
+      "type": "array",
+      "items": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "type": "number"
+        },
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "type": "number"
+        },
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 1000000,
+          "type": "number"
+        }
+      ],
+      "additionalItems": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "metadata": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "spacexr-tile-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "generate": "tsx tools/generate-schemas.ts",
+    "configure": "tsx tools/service-cli/src/main.ts configure",
+    "dev": "tsx tools/service-cli/src/main.ts dev",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && vitest run",
+    "lint": "eslint \"{apps,packages,tools,workers,tests}/**/*.ts\"",
+    "format": "prettier --check \"{apps,packages,tools,workers,tests,deployments,docs,migrations,scripts}/**/*.{ts,js,mjs,json,yaml,md,html,css,sql}\" \"*.{json,md,ts}\" --ignore-unknown",
+    "format:fix": "prettier --write \"{apps,packages,tools,workers,tests,deployments,docs,migrations,scripts}/**/*.{ts,js,mjs,json,yaml,md,html,css,sql}\" \"*.{json,md,ts}\" --ignore-unknown",
+    "check": "npm run format && npm run lint && npm run typecheck && npm test",
+    "synthetic": "tsx tools/synthetic.ts",
+    "worker": "tsx workers/build-consumer/src/main.ts",
+    "cli": "tsx tools/service-cli/src/main.ts"
+  },
+  "dependencies": {
+    "@spacexr/celestial-core": "file:../celestial-core",
+    "quantia": "file:../quantia",
+    "@spacexr/geodesy": "0.4.0",
+    "@sinclair/typebox": "0.34.52",
+    "aws4fetch": "1.0.20",
+    "yaml": "^2.8.0",
+    "sharp": "0.35.5",
+    "@gltf-transform/core": "4.5.1",
+    "@gltf-transform/functions": "4.5.1",
+    "gl-matrix": "3.4.4",
+    "@spacexr/3d-tiles-core": "file:../3d-tiles-core/node/packages/core",
+    "@spacexr/3d-tiles-runtime": "file:../3d-tiles-core/node/packages/runtime",
+    "@spacexr/tiles": "file:../3d-tiles-core/node/packages/tiles",
+    "@spacexr/raster": "file:../3d-tiles-core/node/packages/raster",
+    "@spacexr/dem": "file:../3d-tiles-core/node/packages/dem"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261104.1",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.2.0",
+    "typescript": "^5.4.0",
+    "tsx": "4.23.15",
+    "esbuild": "0.28.2",
+    "vitest": "4.1.11",
+    "miniflare": "4.20260730.0",
+    "wrangler": "4.157.0",
+    "json-schema-to-typescript": "16.0.0",
+    "ajv": "8.20.0",
+    "typedoc": "^0.28.0"
+  },
+  "overrides": {
+    "vite": "8.3.1",
+    "quantia": "$quantia",
+    "@spacexr/geodesy": "$@spacexr/geodesy",
+    "@spacexr/3d-tiles-core": "$@spacexr/3d-tiles-core",
+    "@spacexr/tiles": "$@spacexr/tiles",
+    "@spacexr/raster": "$@spacexr/raster"
+  }
+}

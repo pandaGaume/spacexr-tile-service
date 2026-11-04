@@ -1,0 +1,507 @@
+{
+  "additionalProperties": false,
+  "$id": "IDatasetInput",
+  "type": "object",
+  "required": [
+    "manifest"
+  ],
+  "properties": {
+    "manifest": {
+      "additionalProperties": false,
+      "$id": "ITile2DManifest",
+      "type": "object",
+      "required": [
+        "schema",
+        "id",
+        "bodyId",
+        "revision",
+        "instanceId",
+        "tileMatrixSet",
+        "referenceFrame",
+        "latitudeType",
+        "longitudeDirection",
+        "fallbackDatasetIds",
+        "priority",
+        "provenance",
+        "contentHashes",
+        "publishedAt"
+      ],
+      "properties": {
+        "schema": {
+          "const": "spacexr.tile2d/1",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+          "type": "string"
+        },
+        "bodyId": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+          "type": "string"
+        },
+        "instanceId": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+          "type": "string"
+        },
+        "tileMatrixSet": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "id",
+            "projection",
+            "origin",
+            "levelZeroColumns",
+            "levelZeroRows"
+          ],
+          "properties": {
+            "id": {
+              "const": "spacexr-geographic-2x1",
+              "type": "string"
+            },
+            "projection": {
+              "const": "equirectangular",
+              "type": "string"
+            },
+            "origin": {
+              "const": "north-west",
+              "type": "string"
+            },
+            "levelZeroColumns": {
+              "const": 2,
+              "type": "number"
+            },
+            "levelZeroRows": {
+              "const": 1,
+              "type": "number"
+            }
+          }
+        },
+        "referenceFrame": {
+          "minLength": 1,
+          "maxLength": 200,
+          "type": "string"
+        },
+        "latitudeType": {
+          "const": "planetographic",
+          "type": "string"
+        },
+        "longitudeDirection": {
+          "const": "east-positive",
+          "type": "string"
+        },
+        "imagery": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "url",
+            "minLevel",
+            "maxLevel",
+            "tileSize",
+            "encoding",
+            "availability",
+            "footprint",
+            "resolutionMetres"
+          ],
+          "properties": {
+            "url": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            },
+            "minLevel": {
+              "minimum": 0,
+              "maximum": 24,
+              "type": "integer"
+            },
+            "maxLevel": {
+              "minimum": 0,
+              "maximum": 24,
+              "type": "integer"
+            },
+            "tileSize": {
+              "anyOf": [
+                {
+                  "const": 256,
+                  "type": "number"
+                },
+                {
+                  "const": 512,
+                  "type": "number"
+                },
+                {
+                  "const": 257,
+                  "type": "number"
+                }
+              ]
+            },
+            "encoding": {
+              "anyOf": [
+                {
+                  "const": "webp",
+                  "type": "string"
+                },
+                {
+                  "const": "jpeg",
+                  "type": "string"
+                },
+                {
+                  "const": "float32-le",
+                  "type": "string"
+                },
+                {
+                  "const": "terrarium-png",
+                  "type": "string"
+                }
+              ]
+            },
+            "unit": {
+              "const": "m",
+              "type": "string"
+            },
+            "noData": {
+              "anyOf": [
+                {
+                  "const": "NaN",
+                  "type": "string"
+                },
+                {
+                  "const": "transparent",
+                  "type": "string"
+                }
+              ]
+            },
+            "availability": {
+              "maxItems": 10000,
+              "type": "array",
+              "items": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "z",
+                  "minX",
+                  "maxX",
+                  "minY",
+                  "maxY"
+                ],
+                "properties": {
+                  "z": {
+                    "minimum": 0,
+                    "maximum": 24,
+                    "type": "integer"
+                  },
+                  "minX": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxX": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "minY": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxY": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                }
+              }
+            },
+            "footprint": {
+              "minItems": 1,
+              "maxItems": 1000,
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": [
+                  {
+                    "minimum": -180,
+                    "maximum": 180,
+                    "type": "number"
+                  },
+                  {
+                    "minimum": -90,
+                    "maximum": 90,
+                    "type": "number"
+                  },
+                  {
+                    "minimum": -180,
+                    "maximum": 180,
+                    "type": "number"
+                  },
+                  {
+                    "minimum": -90,
+                    "maximum": 90,
+                    "type": "number"
+                  }
+                ],
+                "additionalItems": false,
+                "minItems": 4,
+                "maxItems": 4
+              }
+            },
+            "verticalDatum": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            },
+            "quantizationStepMetres": {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            "resolutionMetres": {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            }
+          }
+        },
+        "elevation": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "url",
+            "minLevel",
+            "maxLevel",
+            "tileSize",
+            "encoding",
+            "availability",
+            "footprint",
+            "resolutionMetres"
+          ],
+          "properties": {
+            "url": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            },
+            "minLevel": {
+              "minimum": 0,
+              "maximum": 24,
+              "type": "integer"
+            },
+            "maxLevel": {
+              "minimum": 0,
+              "maximum": 24,
+              "type": "integer"
+            },
+            "tileSize": {
+              "anyOf": [
+                {
+                  "const": 256,
+                  "type": "number"
+                },
+                {
+                  "const": 512,
+                  "type": "number"
+                },
+                {
+                  "const": 257,
+                  "type": "number"
+                }
+              ]
+            },
+            "encoding": {
+              "anyOf": [
+                {
+                  "const": "webp",
+                  "type": "string"
+                },
+                {
+                  "const": "jpeg",
+                  "type": "string"
+                },
+                {
+                  "const": "float32-le",
+                  "type": "string"
+                },
+                {
+                  "const": "terrarium-png",
+                  "type": "string"
+                }
+              ]
+            },
+            "unit": {
+              "const": "m",
+              "type": "string"
+            },
+            "noData": {
+              "anyOf": [
+                {
+                  "const": "NaN",
+                  "type": "string"
+                },
+                {
+                  "const": "transparent",
+                  "type": "string"
+                }
+              ]
+            },
+            "availability": {
+              "maxItems": 10000,
+              "type": "array",
+              "items": {
+                "additionalProperties": false,
+                "type": "object",
+                "required": [
+                  "z",
+                  "minX",
+                  "maxX",
+                  "minY",
+                  "maxY"
+                ],
+                "properties": {
+                  "z": {
+                    "minimum": 0,
+                    "maximum": 24,
+                    "type": "integer"
+                  },
+                  "minX": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxX": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "minY": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxY": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                }
+              }
+            },
+            "footprint": {
+              "minItems": 1,
+              "maxItems": 1000,
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": [
+                  {
+                    "minimum": -180,
+                    "maximum": 180,
+                    "type": "number"
+                  },
+                  {
+                    "minimum": -90,
+                    "maximum": 90,
+                    "type": "number"
+                  },
+                  {
+                    "minimum": -180,
+                    "maximum": 180,
+                    "type": "number"
+                  },
+                  {
+                    "minimum": -90,
+                    "maximum": 90,
+                    "type": "number"
+                  }
+                ],
+                "additionalItems": false,
+                "minItems": 4,
+                "maxItems": 4
+              }
+            },
+            "verticalDatum": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            },
+            "quantizationStepMetres": {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            "resolutionMetres": {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            }
+          }
+        },
+        "fallbackDatasetIds": {
+          "maxItems": 16,
+          "type": "array",
+          "items": {
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+            "type": "string"
+          }
+        },
+        "priority": {
+          "minimum": 0,
+          "maximum": 10000,
+          "type": "integer"
+        },
+        "provenance": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "kind",
+            "source",
+            "attribution",
+            "license",
+            "verified"
+          ],
+          "properties": {
+            "kind": {
+              "anyOf": [
+                {
+                  "const": "synthetic",
+                  "type": "string"
+                },
+                {
+                  "const": "scientific",
+                  "type": "string"
+                },
+                {
+                  "const": "user",
+                  "type": "string"
+                }
+              ]
+            },
+            "source": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            },
+            "attribution": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            },
+            "license": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            },
+            "verified": {
+              "type": "boolean"
+            }
+          }
+        },
+        "contentHashes": {
+          "type": "object",
+          "patternProperties": {
+            "^(.*)$": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            }
+          }
+        },
+        "publishedAt": {
+          "minLength": 10,
+          "maxLength": 40,
+          "type": "string"
+        }
+      }
+    }
+  }
+}

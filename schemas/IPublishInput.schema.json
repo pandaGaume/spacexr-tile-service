@@ -1,0 +1,14 @@
+{
+  "additionalProperties": false,
+  "$id": "IPublishInput",
+  "type": "object",
+  "required": [
+    "version"
+  ],
+  "properties": {
+    "version": {
+      "minimum": 1,
+      "type": "integer"
+    }
+  }
+}

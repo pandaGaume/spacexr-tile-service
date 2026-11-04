@@ -1,0 +1,54 @@
+{
+  "service": {
+    "id": "planetary",
+    "name": "Planetary Tile Service",
+    "purpose": "planetary",
+    "baseUrl": "http://127.0.0.1:8787",
+    "adminOrigin": "http://127.0.0.1:5173",
+    "ownerTenant": "owner"
+  },
+  "features": {
+    "tile2d": true,
+    "tiles3d": true,
+    "assetUpload": true,
+    "layerPublishing": true
+  },
+  "catalog": {
+    "bodies": [
+      {
+        "id": "earth",
+        "catalogueName": "Earth",
+        "referenceFrame": "body-fixed:earth",
+        "latitudeType": "planetographic",
+        "longitudeDirection": "east-positive",
+        "verticalDatum": "reference-ellipsoid"
+      },
+      {
+        "id": "moon",
+        "catalogueName": "Moon",
+        "referenceFrame": "body-fixed:moon",
+        "latitudeType": "planetographic",
+        "longitudeDirection": "east-positive",
+        "verticalDatum": "reference-ellipsoid"
+      },
+      {
+        "id": "mars",
+        "catalogueName": "Mars",
+        "referenceFrame": "body-fixed:mars",
+        "latitudeType": "planetographic",
+        "longitudeDirection": "east-positive",
+        "verticalDatum": "reference-ellipsoid"
+      }
+    ],
+    "engineeringFrames": []
+  },
+  "quotas": {
+    "assetBytes": 16777216,
+    "tenantStorageBytes": 1073741824,
+    "layerObjects": 10000,
+    "activeJobs": 4,
+    "requestsPerMinute": 600,
+    "builderObjects": 100000
+  },
+  "extensions": []
+}

@@ -1,0 +1,218 @@
+{
+  "additionalProperties": false,
+  "$id": "IServiceConfig",
+  "type": "object",
+  "required": [
+    "service",
+    "features",
+    "catalog",
+    "quotas",
+    "extensions"
+  ],
+  "properties": {
+    "service": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "purpose",
+        "baseUrl",
+        "adminOrigin",
+        "ownerTenant"
+      ],
+      "properties": {
+        "id": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "maxLength": 200,
+          "type": "string"
+        },
+        "purpose": {
+          "minLength": 1,
+          "maxLength": 80,
+          "type": "string"
+        },
+        "baseUrl": {
+          "minLength": 1,
+          "maxLength": 200,
+          "type": "string"
+        },
+        "adminOrigin": {
+          "minLength": 1,
+          "maxLength": 200,
+          "type": "string"
+        },
+        "ownerTenant": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+          "type": "string"
+        }
+      }
+    },
+    "features": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "tile2d",
+        "tiles3d",
+        "assetUpload",
+        "layerPublishing"
+      ],
+      "properties": {
+        "tile2d": {
+          "type": "boolean"
+        },
+        "tiles3d": {
+          "type": "boolean"
+        },
+        "assetUpload": {
+          "type": "boolean"
+        },
+        "layerPublishing": {
+          "type": "boolean"
+        }
+      }
+    },
+    "catalog": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "bodies",
+        "engineeringFrames"
+      ],
+      "properties": {
+        "bodies": {
+          "maxItems": 100,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "id",
+              "catalogueName",
+              "referenceFrame",
+              "latitudeType",
+              "longitudeDirection",
+              "verticalDatum"
+            ],
+            "properties": {
+              "id": {
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+                "type": "string"
+              },
+              "catalogueName": {
+                "minLength": 1,
+                "maxLength": 200,
+                "type": "string"
+              },
+              "referenceFrame": {
+                "minLength": 1,
+                "maxLength": 200,
+                "type": "string"
+              },
+              "latitudeType": {
+                "const": "planetographic",
+                "type": "string"
+              },
+              "longitudeDirection": {
+                "const": "east-positive",
+                "type": "string"
+              },
+              "verticalDatum": {
+                "const": "reference-ellipsoid",
+                "type": "string"
+              }
+            }
+          }
+        },
+        "engineeringFrames": {
+          "maxItems": 100,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "units",
+              "axes"
+            ],
+            "properties": {
+              "id": {
+                "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+                "type": "string"
+              },
+              "name": {
+                "minLength": 1,
+                "maxLength": 200,
+                "type": "string"
+              },
+              "units": {
+                "const": "m",
+                "type": "string"
+              },
+              "axes": {
+                "const": "right-handed-z-up",
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "quotas": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "assetBytes",
+        "tenantStorageBytes",
+        "layerObjects",
+        "activeJobs",
+        "requestsPerMinute",
+        "builderObjects"
+      ],
+      "properties": {
+        "assetBytes": {
+          "minimum": 1024,
+          "maximum": 67108864,
+          "type": "integer"
+        },
+        "tenantStorageBytes": {
+          "minimum": 1024,
+          "type": "integer"
+        },
+        "layerObjects": {
+          "minimum": 1,
+          "maximum": 1000000,
+          "type": "integer"
+        },
+        "activeJobs": {
+          "minimum": 1,
+          "maximum": 64,
+          "type": "integer"
+        },
+        "requestsPerMinute": {
+          "minimum": 1,
+          "maximum": 100000,
+          "type": "integer"
+        },
+        "builderObjects": {
+          "minimum": 1,
+          "maximum": 1000000,
+          "type": "integer"
+        }
+      }
+    },
+    "extensions": {
+      "maxItems": 20,
+      "type": "array",
+      "items": {
+        "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_/-]{0,100}$",
+        "type": "string"
+      }
+    }
+  }
+}

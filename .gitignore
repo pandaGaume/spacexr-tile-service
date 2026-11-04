@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.generated/
+.local/
+.cache/
+.wrangler/
+.dev.vars*
+.env*
+*.tgz
+coverage/
+docs/api/

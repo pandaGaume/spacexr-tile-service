@@ -1,0 +1,36 @@
+{
+  "service": {
+    "id": "industrial",
+    "name": "Industrial Digital Twin",
+    "purpose": "industrial",
+    "baseUrl": "http://127.0.0.1:8788",
+    "adminOrigin": "http://127.0.0.1:5174",
+    "ownerTenant": "owner"
+  },
+  "features": {
+    "tile2d": false,
+    "tiles3d": true,
+    "assetUpload": true,
+    "layerPublishing": true
+  },
+  "catalog": {
+    "bodies": [],
+    "engineeringFrames": [
+      {
+        "id": "factory-floor",
+        "name": "Factory floor",
+        "units": "m",
+        "axes": "right-handed-z-up"
+      }
+    ]
+  },
+  "quotas": {
+    "assetBytes": 16777216,
+    "tenantStorageBytes": 1073741824,
+    "layerObjects": 10000,
+    "activeJobs": 4,
+    "requestsPerMinute": 600,
+    "builderObjects": 100000
+  },
+  "extensions": []
+}

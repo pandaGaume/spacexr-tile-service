@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "$id": "ILayerInput",
+  "type": "object",
+  "required": [
+    "name",
+    "visibility"
+  ],
+  "properties": {
+    "name": {
+      "minLength": 1,
+      "maxLength": 200,
+      "type": "string"
+    },
+    "visibility": {
+      "anyOf": [
+        {
+          "const": "public",
+          "type": "string"
+        },
+        {
+          "const": "private",
+          "type": "string"
+        }
+      ]
+    },
+    "bodyId": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+      "type": "string"
+    },
+    "frameId": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {}
+      }
+    }
+  }
+}
