@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="fr">
+    <meta charset="utf-8" /><meta name="viewport" content="width=device-width" />
+    <title>Lune NASA : imagerie et DEM sur R2</title>
+    <style>
+        body {
+            font: 16px system-ui;
+            background: #0b1220;
+            color: #dce6f5;
+            margin: 24px auto;
+            padding: 16px;
+            max-width: 1200px;
+        }
+        a {
+            color: #91c8ff;
+        }
+        canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+            border: 1px solid #455069;
+        }
+        label {
+            margin-right: 24px;
+        }
+        button,
+        select {
+            font: inherit;
+        }
+        #status {
+            min-height: 28px;
+        }
+        small {
+            color: #abb9cb;
+        }
+    </style>
+    <h1>Lune NASA : imagerie et DEM</h1>
+    <p>
+        Images LROC préparées pour la visualisation et altitudes LOLA numériques. Crédit : NASA's Scientific
+        Visualization Studio, équipes LRO LROC et LOLA.
+    </p>
+    <p>
+        <a href="https://svs.gsfc.nasa.gov/4720/">Source NASA</a> · <a href="manifest.json">Manifeste</a> ·
+        <a href="source.json">Sources, unités et limites</a>
+    </p>
+    <p>
+        <label
+            >Affichage
+            <select id="mode">
+                <option value="imagery">Imagerie LROC</option>
+                <option value="dem">Relief LOLA, ombrage indicatif</option>
+            </select></label
+        ><label
+            >Niveau
+            <select id="level">
+                <option>0</option>
+                <option>1</option>
+                <option selected>2</option>
+            </select></label
+        ><button id="draw">Afficher</button>
+    </p>
+    <p id="status" role="status">Chargement...</p>
+    <canvas id="map" width="2048" height="1024"></canvas>
+    <p>
+        <small
+            >Longitude de -180° à +180°, nord en haut. DEM relatif à une sphère de rayon 1 737 400 m. Aucune conversion
+            vers l'ellipsoïde du moteur. Le premier rang du DEM source contient des zéros, conservés ici. L'imagerie est
+            corrigée pour le rendu et complétée aux pôles ; elle n'est pas radiométriquement calibrée.</small
+        >
+    </p>
+    <script type="module">
+        const canvas = document.querySelector("#map"),
+            ctx = canvas.getContext("2d"),
+            status = document.querySelector("#status"),
+            level = document.querySelector("#level"),
+            mode = document.querySelector("#mode");
+        let heights,
+            rows = 4,
+            generation = 0;
+        async function draw() {
+            const run = ++generation;
+            heights = undefined;
+            const dem = mode.value === "dem",
+                z = dem ? Math.min(1, Number(level.value)) : Number(level.value);
+            level.value = String(z);
+            rows = 2 ** z;
+            canvas.width = rows * 512;
+            canvas.height = rows * 256;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            status.textContent = "Chargement des tuiles R2...";
+            const tasks = [];
+            if (dem) heights = new Float32Array(canvas.width * canvas.height);
+            for (let y = 0; y < rows; y++)
+                for (let x = 0; x < 2 * rows; x++)
+                    tasks.push(
+                        (async () => {
+                            if (!dem) {
+                                const response = await fetch(`imagery/${z}/${x}/${y}.webp`);
+                                if (!response.ok) throw Error("Image HTTP " + response.status);
+                                const bitmap = await createImageBitmap(await response.blob());
+                                if (run === generation) ctx.drawImage(bitmap, x * 256, y * 256);
+                                bitmap.close();
+                                return;
+                            }
+                            const response = await fetch(`dem-f32/${z}/${x}/${y}.f32`);
+                            if (!response.ok) throw Error("DEM HTTP " + response.status);
+                            const raw = new DataView(await response.arrayBuffer()),
+                                pixels = ctx.createImageData(256, 256),
+                                step = (2 * Math.PI * 1737400) / canvas.width;
+                            for (let j = 0; j < 256; j++)
+                                for (let i = 0; i < 256; i++) {
+                                    const value = (col, row) => raw.getFloat32((row * 257 + col) * 4, true),
+                                        h = value(i, j),
+                                        lat = ((90 - ((y * 256 + j + 0.5) / canvas.height) * 180) * Math.PI) / 180,
+                                        dx = step * Math.max(0.02, Math.cos(lat)),
+                                        gx = (value(i + 1, j) - h) / dx,
+                                        gy = (value(i, j + 1) - h) / step,
+                                        n = Math.hypot(gx, gy, 1),
+                                        light = Math.max(0, (-gx * 0.5 + gy * 0.5 + 0.707) / n),
+                                        shade = Math.round(25 + 230 * light),
+                                        index = (j * 256 + i) * 4;
+                                    pixels.data.set([shade, shade, shade, 255], index);
+                                    if (run === generation) heights[(y * 256 + j) * canvas.width + x * 256 + i] = h;
+                                }
+                            if (run === generation) ctx.putImageData(pixels, x * 256, y * 256);
+                        })(),
+                    );
+            await Promise.all(tasks);
+            if (run === generation)
+                status.textContent = `${dem ? "DEM LOLA en mètres, survolez la carte" : "Imagerie LROC"} ; niveau ${z}, ${2 * rows}×${rows} tuiles.`;
+        }
+        canvas.addEventListener("pointermove", (event) => {
+            if (!heights) return;
+            const b = canvas.getBoundingClientRect(),
+                x = Math.min(
+                    canvas.width - 1,
+                    Math.max(0, Math.floor(((event.clientX - b.left) / b.width) * canvas.width)),
+                ),
+                y = Math.min(
+                    canvas.height - 1,
+                    Math.max(0, Math.floor(((event.clientY - b.top) / b.height) * canvas.height)),
+                );
+            status.textContent = `Longitude ${(-180 + (x / canvas.width) * 360).toFixed(2)}°, latitude ${(90 - (y / canvas.height) * 180).toFixed(2)}° ; hauteur LOLA ${heights[y * canvas.width + x].toFixed(1)} m (rayon 1 737 400 m).`;
+        });
+        function start() {
+            draw().catch((error) => {
+                status.textContent = error.message;
+            });
+        }
+        document.querySelector("#draw").addEventListener("click", start);
+        mode.addEventListener("change", start);
+        level.addEventListener("change", start);
+        start();
+    </script>
+</html>

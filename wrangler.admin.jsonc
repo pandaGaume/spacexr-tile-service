@@ -1,0 +1,36 @@
+// Local development only. These bindings never select the public R2 smoke-test bucket.
+{
+    "name": "planetary-admin-local",
+    "main": "dist/api/main.js",
+    "compatibility_date": "2026-07-01",
+    "assets": {
+        "directory": "./dist/admin",
+        "binding": "ASSETS",
+        "run_worker_first": true,
+    },
+    "vars": {
+        "LOCAL_DEV": "true",
+    },
+    "d1_databases": [
+        {
+            "binding": "DB",
+            "database_name": "planetary-admin-local",
+            "database_id": "00000000-0000-0000-0000-000000000001",
+            "migrations_dir": "migrations",
+        },
+    ],
+    "r2_buckets": [
+        {
+            "binding": "PUBLIC",
+            "bucket_name": "planetary-admin-public-local",
+        },
+        {
+            "binding": "PRIVATE",
+            "bucket_name": "planetary-admin-private-local",
+        },
+    ],
+    "dev": {
+        "ip": "127.0.0.1",
+        "port": 8790,
+    },
+}

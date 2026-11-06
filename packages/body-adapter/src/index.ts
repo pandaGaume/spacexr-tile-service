@@ -1,5 +1,5 @@
 import {SolarSystemBodies,type CelestialCatalogue} from "@spacexr/celestial-core/catalog";
-import {GeodeticSystem,LocalTangentPlane} from "@spacexr/geodesy";
+import {GeodeticSystem,type LocalTangentPlane} from "@spacexr/geodesy";
 import {Length} from "quantia";
 import {ServiceError,type IBodyProfile,type IBodyReference,type IBodyRegistry} from "@spacexr-service/shared";
 /** Celestial-catalogue adapter. Defaults are referenced, never copied into a second physical database. */

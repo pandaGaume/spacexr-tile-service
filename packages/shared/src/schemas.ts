@@ -22,7 +22,7 @@ export const Tile2DManifestSchema=Type.Object({
  referenceFrame:Text,latitudeType:Type.Literal("planetographic"),longitudeDirection:Type.Literal("east-positive"),
  imagery:Type.Optional(TileChannelSchema),elevation:Type.Optional(TileChannelSchema),
  fallbackDatasetIds:Type.Array(IdSchema,{maxItems:16}),priority:Type.Integer({minimum:0,maximum:10000}),
- provenance:Type.Object({kind:Type.Union([Type.Literal("synthetic"),Type.Literal("scientific"),Type.Literal("user")]),source:Text,attribution:Text,license:Text,verified:Type.Boolean()},{additionalProperties:false}),
+ provenance:Type.Object({kind:Type.Union([Type.Literal("synthetic"),Type.Literal("scientific"),Type.Literal("visualization"),Type.Literal("user")]),source:Text,attribution:Text,license:Text,verified:Type.Boolean()},{additionalProperties:false}),
  contentHashes:Type.Record(Type.String(),Type.String({pattern:"^[a-f0-9]{64}$"})),
  publishedAt:Type.String({minLength:10,maxLength:40}),
 },{additionalProperties:false,$id:"ITile2DManifest"});
