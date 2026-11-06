@@ -1,0 +1,217 @@
+{
+  "additionalProperties": false,
+  "$id": "IDatasetDraftUpdate",
+  "type": "object",
+  "required": [
+    "version",
+    "name",
+    "bodyId",
+    "source",
+    "descriptor"
+  ],
+  "properties": {
+    "version": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "name": {
+      "minLength": 1,
+      "maxLength": 200,
+      "type": "string"
+    },
+    "bodyId": {
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$",
+      "type": "string"
+    },
+    "source": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "url",
+        "attribution",
+        "notes"
+      ],
+      "properties": {
+        "url": {
+          "minLength": 1,
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "attribution": {
+          "minLength": 1,
+          "maxLength": 1000,
+          "type": "string"
+        },
+        "notes": {
+          "maxLength": 4000,
+          "type": "string"
+        }
+      }
+    },
+    "descriptor": {
+      "additionalProperties": false,
+      "$id": "ICubeDatasetDescriptor",
+      "type": "object",
+      "required": [
+        "scheme",
+        "body",
+        "frame",
+        "referenceRadii",
+        "content",
+        "encoding",
+        "tileSize",
+        "minLOD",
+        "maxLOD",
+        "subtrees",
+        "tiles"
+      ],
+      "properties": {
+        "scheme": {
+          "const": "spacexr-cube-equiangular/1",
+          "type": "string"
+        },
+        "body": {
+          "minLength": 1,
+          "maxLength": 80,
+          "type": "string"
+        },
+        "frame": {
+          "minLength": 1,
+          "maxLength": 120,
+          "type": "string"
+        },
+        "frameVersion": {
+          "minLength": 1,
+          "maxLength": 120,
+          "type": "string"
+        },
+        "referenceRadii": {
+          "type": "array",
+          "items": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 1000000000000,
+              "type": "number"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 1000000000000,
+              "type": "number"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 1000000000000,
+              "type": "number"
+            }
+          ],
+          "additionalItems": false,
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "content": {
+          "anyOf": [
+            {
+              "const": "elevation",
+              "type": "string"
+            },
+            {
+              "const": "imagery",
+              "type": "string"
+            }
+          ]
+        },
+        "encoding": {
+          "anyOf": [
+            {
+              "const": "terrarium",
+              "type": "string"
+            },
+            {
+              "const": "float32-le",
+              "type": "string"
+            },
+            {
+              "const": "png",
+              "type": "string"
+            },
+            {
+              "const": "jpeg",
+              "type": "string"
+            },
+            {
+              "const": "webp",
+              "type": "string"
+            }
+          ]
+        },
+        "tileSize": {
+          "anyOf": [
+            {
+              "const": 256,
+              "type": "number"
+            },
+            {
+              "const": 512,
+              "type": "number"
+            }
+          ]
+        },
+        "minLOD": {
+          "minimum": 0,
+          "maximum": 24,
+          "type": "integer"
+        },
+        "maxLOD": {
+          "minimum": 0,
+          "maximum": 24,
+          "type": "integer"
+        },
+        "subtrees": {
+          "maxItems": 256,
+          "type": "array",
+          "items": {
+            "additionalProperties": false,
+            "type": "object",
+            "required": [
+              "face",
+              "lod",
+              "x",
+              "y",
+              "maxLOD"
+            ],
+            "properties": {
+              "face": {
+                "minimum": 0,
+                "maximum": 5,
+                "type": "integer"
+              },
+              "lod": {
+                "minimum": 0,
+                "maximum": 24,
+                "type": "integer"
+              },
+              "x": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "y": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxLOD": {
+                "minimum": 0,
+                "maximum": 24,
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "tiles": {
+          "minLength": 1,
+          "maxLength": 2048,
+          "type": "string"
+        }
+      }
+    }
+  }
+}

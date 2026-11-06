@@ -126,7 +126,7 @@ export interface ITile2DManifest {
       ];
   priority: number;
   provenance: {
-    kind: "synthetic" | "scientific" | "user";
+    kind: "synthetic" | "scientific" | "visualization" | "user";
     source: string;
     attribution: string;
     license: string;

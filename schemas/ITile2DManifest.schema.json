@@ -454,6 +454,10 @@
               "type": "string"
             },
             {
+              "const": "visualization",
+              "type": "string"
+            },
+            {
               "const": "user",
               "type": "string"
             }
