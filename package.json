@@ -30,7 +30,9 @@
     "admin:setup": "tsx tools/admin/setup.ts",
     "admin:dev": "wrangler dev --config wrangler.admin.jsonc --local",
     "admin:build": "node scripts/build.mjs",
-    "lunar": "tsx tools/lunar/main.ts"
+    "lunar": "tsx tools/lunar/main.ts",
+    "mars": "tsx tools/mars/main.ts",
+    "tiles:serve": "tsx tools/tile-server.ts serve"
   },
   "dependencies": {
     "@gltf-transform/core": "4.5.1",

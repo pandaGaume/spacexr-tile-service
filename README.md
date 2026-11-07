@@ -4,6 +4,8 @@ Independent Cloudflare geospatial publishing instances share one modular source 
 
 See [architecture](docs/ARCHITECTURE.md) and [dependency audit](docs/DEPENDENCY-AUDIT.md). The authoritative libraries are sibling checkouts during development. Build their packages before installing this workspace. Quantia provides units; the public Terrarium encoder belongs to @spacexr/dem.
 
+The loopback planetary tile server and its Moon and Mars endpoints are described in [local tile server](docs/LOCAL_TILE_SERVER.md).
+
 This repository contains no cloud credentials or pre-created Cloudflare resource identifiers. Scientific coverage is published only after product verification and successful ingestion. Synthetic fixtures are identified as synthetic.
 
 ## Administration
