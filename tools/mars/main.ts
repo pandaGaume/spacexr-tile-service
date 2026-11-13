@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { buildGlobalMars } from "./global-cube";
 import { buildJezeroCtxCorrection, buildJezeroRefinement } from "./jezero-refinement";
 import { createJezeroServer } from "./jezero-server";
 
@@ -10,10 +11,12 @@ for (let index = 0; index < args.length; index += 2) {
     if (args[index] === "--root" && args[index + 1]) root = args[index + 1]!;
     else if (args[index] === "--max-lod" && args[index + 1]) maxLOD = Number(args[index + 1]);
     else if (args[index] === "--port" && args[index + 1]) port = Number(args[index + 1]);
-    else throw new Error("Usage: npm run mars -- jezero-refine|jezero-refine-ctx-corrected|jezero-serve [--root DIRECTORY] [--max-lod 11..16] [--port PORT]");
+    else throw new Error("Usage: npm run mars -- global-cube|jezero-refine|jezero-refine-ctx-corrected|jezero-serve [--root DIRECTORY] [--max-lod 11..16] [--port PORT]");
 }
 
-if (command === "jezero-refine-ctx-corrected") {
+if (command === "global-cube") {
+    await buildGlobalMars(resolve(root));
+} else if (command === "jezero-refine-ctx-corrected") {
     await buildJezeroCtxCorrection(resolve(root));
 } else if (command === "jezero-refine") {
     await buildJezeroRefinement(resolve(root), maxLOD);
@@ -27,5 +30,5 @@ if (command === "jezero-refine-ctx-corrected") {
     console.log(`Jezero terrain: http://127.0.0.1:${port}/`);
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => server.close());
 } else {
-    throw new Error("Usage: npm run mars -- jezero-refine|jezero-refine-ctx-corrected|jezero-serve [--root DIRECTORY] [--max-lod 11..16] [--port PORT]");
+    throw new Error("Usage: npm run mars -- global-cube|jezero-refine|jezero-refine-ctx-corrected|jezero-serve [--root DIRECTORY] [--max-lod 11..16] [--port PORT]");
 }

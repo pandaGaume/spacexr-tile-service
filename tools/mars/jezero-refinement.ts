@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { readFile, readdir, stat, unlink, writeFile, mkdir } from "node:fs/promises";
+import { dirname, relative, resolve, sep } from "node:path";
 import sharp from "sharp";
 import { fromFile } from "geotiff";
 import { createHeightGrid, encodeTerrariumGrid } from "@spacexr/dem";
 import { cubeFaceCoordinates, cubeFaceDirection, CubeFace } from "@spacexr/tiles/cube";
+import { loadMolaRadius16 } from "./global-mola";
 
 const TILE_SIZE = 256;
 const MOLA_ROOT = "F:/MarsData/sources/mola/meg004";
 const DEFAULT_ROOT = "F:/MarsData";
 const ELLIPSOID_A = 3396190;
 const ELLIPSOID_C = 3376200;
+/** Distance between two samples of MOLA MEGR 16 ppd along the equator of the reference sphere, in metres. */
+const MOLA_16_SPACING = (2 * Math.PI * 3396190) / (360 * 16);
 
 interface IRaster {
     width: number;
@@ -26,7 +29,52 @@ interface IRaster {
 
 interface IBounds { minLat: number; maxLat: number; minLon: number; maxLon: number; }
 
+/**
+ * A regional DEM in the cascade of sources: where it has data, it gives the heights; towards the limit of its data it
+ * blends into the source below it over one sample of that source, which cannot hold anything narrower.
+ */
+interface ISource {
+    raster: IRaster;
+    /** Distance in pixels from each valid pixel to the nearest pixel without data or to the edge, at most `blendPixels`. */
+    inside: Float32Array;
+    blendPixels: number;
+}
+
 function sha256(data: Uint8Array): string { return createHash("sha256").update(data).digest("hex"); }
+
+function valid(raster: IRaster, value: number): boolean {
+    return Number.isFinite(value) && value !== raster.noData;
+}
+
+/**
+ * Chamfer distance, in pixels, from each pixel with data to the nearest pixel without data, the area outside the raster
+ * counting as without data. Only distances up to `limit` matter, the width of a blend.
+ */
+function insideDistance(raster: IRaster, limit: number): Float32Array {
+    const { width, height, values } = raster;
+    const distance = new Float32Array(width * height);
+    for (let index = 0; index < distance.length; index++) distance[index] = valid(raster, values[index]!) ? limit : 0;
+    const diagonal = Math.SQRT2;
+    const at = (x: number, y: number): number => (x < 0 || y < 0 || x >= width || y >= height ? 0 : distance[y * width + x]!);
+    for (let y = 0; y < height; y++)
+        for (let x = 0; x < width; x++) {
+            const index = y * width + x;
+            if (distance[index] === 0) continue;
+            distance[index] = Math.min(distance[index]!, at(x - 1, y) + 1, at(x, y - 1) + 1, at(x - 1, y - 1) + diagonal, at(x + 1, y - 1) + diagonal);
+        }
+    for (let y = height - 1; y >= 0; y--)
+        for (let x = width - 1; x >= 0; x--) {
+            const index = y * width + x;
+            if (distance[index] === 0) continue;
+            distance[index] = Math.min(distance[index]!, at(x + 1, y) + 1, at(x, y + 1) + 1, at(x + 1, y + 1) + diagonal, at(x - 1, y + 1) + diagonal);
+        }
+    return distance;
+}
+
+function source(raster: IRaster, spacingBelow: number): ISource {
+    const blendPixels = spacingBelow / raster.pixelX;
+    return { raster, inside: insideDistance(raster, blendPixels), blendPixels };
+}
 
 async function loadGeoTiff(file: string): Promise<IRaster> {
     const tiff = await fromFile(file);
@@ -45,6 +93,7 @@ async function loadGeoTiff(file: string): Promise<IRaster> {
     } finally { await tiff.close(); }
 }
 
+/** Bilinear height of a raster where its samples have data, `NaN` elsewhere. */
 function sampleRaster(raster: IRaster, x: number, y: number): number {
     const px = (x - raster.originX) / raster.pixelX - 0.5;
     const py = (raster.originY - y) / raster.pixelY - 0.5;
@@ -54,7 +103,7 @@ function sampleRaster(raster: IRaster, x: number, y: number): number {
         const x = x0 + dx, y = y0 + dy;
         if (!w || x < 0 || y < 0 || x >= raster.width || y >= raster.height) continue;
         const value = raster.values[y * raster.width + x]!;
-        if (!Number.isFinite(value) || value === raster.noData) continue;
+        if (!valid(raster, value)) continue;
         sum += value * w; weight += w;
     }
     return weight ? sum / weight : Number.NaN;
@@ -105,11 +154,7 @@ function addresses(bounds: IBounds, lod: number): Array<{ face: CubeFace; lod: n
 
 interface IMolaGrid { values: Int16Array; radius: boolean; }
 
-/**
- * Load one native MOLA 4 ppd global grid from its PDS big-endian signed samples.
- * The low-frequency grid is used for the areoid relationship. Local stereo DEMs
- * provide the finer terrain, while MOLA supplies the common vertical reference.
- */
+/** Load one native MOLA 4 ppd global grid from its PDS big-endian signed samples, for the areoid. */
 async function loadMolaGrid(kind: "megr" | "megt"): Promise<IMolaGrid> {
     const file = resolve(MOLA_ROOT, `${kind}90n000cb.img`);
     const bytes = await readFile(file);
@@ -135,43 +180,97 @@ function sampleMola(grid: IMolaGrid, latitude: number, longitude: number): numbe
     return total + (grid.radius ? 3396000 : 0);
 }
 
+/** What a regional tile reads: its sources, finest first, the areoid they are measured from and the global base below. */
+interface ICascade {
+    sources: readonly ISource[];
+    /** Radius of the areoid, from the smooth MOLA 4 ppd products: MEGR minus MEGT. */
+    areoid: (latitude: number, longitude: number) => number;
+    /** Radius of the global base, MOLA MEGR 16 ppd, the same as the global tiles. */
+    base: (latitude: number, longitude: number) => number;
+}
+
+/** Weight of a source at a point: 1 inside its data, falling to 0 at its limit over one sample of the source below. */
+function weightAt(source: ISource, x: number, y: number): number {
+    const { raster } = source;
+    const px = Math.floor((x - raster.originX) / raster.pixelX);
+    const py = Math.floor((raster.originY - y) / raster.pixelY);
+    if (px < 0 || py < 0 || px >= raster.width || py >= raster.height) return 0;
+    return smoothstep(source.inside[py * raster.width + px]! / source.blendPixels);
+}
+
+/** Radius at a direction from the sources of a cascade, starting at `index`, and the weight of that source. */
+function cascadeRadius(cascade: ICascade, index: number, latitude: number, longitude: number): { radius: number; weight: number } {
+    const below = (): number =>
+        index + 1 < cascade.sources.length
+            ? cascadeRadius(cascade, index + 1, latitude, longitude).radius
+            : cascade.base(latitude, longitude);
+    const source = cascade.sources[index]!;
+    const [x, y] = sourceXY(latitude, longitude, source.raster.standardParallel);
+    const height = sampleRaster(source.raster, x, y);
+    const weight = Number.isFinite(height) ? weightAt(source, x, y) : 0;
+    if (weight === 0) return { radius: below(), weight };
+    const own = cascade.areoid(latitude, longitude) + height;
+    return { radius: weight === 1 ? own : own * weight + below() * (1 - weight), weight };
+}
+
 /**
- * Reproject one local DEM onto only the cube tiles intersecting its footprint.
- * Heights are moved from the MOLA areoid onto the Mars ellipsoid along each
- * planetocentric direction. A 40-pixel edge blend falls back to the global MOLA
- * topography, avoiding a hard discontinuity where a regional source ends.
+ * Reproject the first source of a cascade onto the cube tiles of its footprint. Heights are moved from the MOLA areoid
+ * onto the Mars 2000 ellipsoid along each planetocentric direction. Where the source has no data, the tile reads the
+ * sources below it, down to the global MOLA 16 ppd base; a tile holding no sample of its source is not written, and a
+ * client reads its place from the tiles below.
  */
-async function buildTiles(root: string, id: string, raster: IRaster, sourceBoundsValue: IBounds, minLOD: number, maxLOD: number,
-    megr: IMolaGrid, megt: IMolaGrid): Promise<object[]> {
-    const files: object[]=[];
-    const invA=1/(ELLIPSOID_A*ELLIPSOID_A), invC=1/(ELLIPSOID_C*ELLIPSOID_C);
-    for (let lod=minLOD; lod<=maxLOD; lod++) for (const tile of addresses(sourceBoundsValue,lod)) {
-        const heights=new Float32Array((TILE_SIZE+1)**2); let min=Infinity,max=-Infinity;
-        for(let row=0;row<=TILE_SIZE;row++) for(let col=0;col<=TILE_SIZE;col++) {
-            const dir=cubeFaceDirection(tile.face,(tile.x+col/TILE_SIZE)/2**lod,(tile.y+row/TILE_SIZE)/2**lod);
-            const lat=Math.atan2(dir.z,Math.hypot(dir.x,dir.y))*180/Math.PI;
-            let lon=Math.atan2(dir.y,dir.x)*180/Math.PI; if(lon<0) lon+=360;
-            const [sx,sy]=sourceXY(lat,lon,raster.standardParallel);
-            const source=sampleRaster(raster,sx,sy);
-            const px=(sx-raster.originX)/raster.pixelX;
-            const py=(raster.originY-sy)/raster.pixelY;
-            const edgePixels=Math.min(px,py,raster.width-px,raster.height-py);
-            const coverage=Number.isFinite(source)?smoothstep(edgePixels/40):0;
-            const fallback=sampleMola(megt,lat,lon);
-            const regional=Number.isFinite(source)?source:fallback;
-            const geoidRadius=sampleMola(megr,lat,lon)-sampleMola(megt,lat,lon);
-            const ellipsoidRadius=1/Math.sqrt((dir.x*dir.x+dir.y*dir.y)*invA+dir.z*dir.z*invC);
-            const height=geoidRadius + fallback*(1-coverage) + regional*coverage - ellipsoidRadius;
-            heights[row*(TILE_SIZE+1)+col]=height; min=Math.min(min,height); max=Math.max(max,height);
+async function buildTiles(root: string, id: string, cascade: ICascade, bounds: IBounds, minLOD: number, maxLOD: number): Promise<object[]> {
+    const files: object[] = [];
+    const invA = 1 / (ELLIPSOID_A * ELLIPSOID_A), invC = 1 / (ELLIPSOID_C * ELLIPSOID_C);
+    const samples = (TILE_SIZE + 1) ** 2;
+    for (let lod = minLOD; lod <= maxLOD; lod++) for (const tile of addresses(bounds, lod)) {
+        const heights = new Float32Array(samples);
+        let min = Infinity, max = -Infinity, covered = 0;
+        for (let row = 0; row <= TILE_SIZE; row++) for (let col = 0; col <= TILE_SIZE; col++) {
+            const dir = cubeFaceDirection(tile.face, (tile.x + col / TILE_SIZE) / 2 ** lod, (tile.y + row / TILE_SIZE) / 2 ** lod);
+            const lat = Math.atan2(dir.z, Math.hypot(dir.x, dir.y)) * 180 / Math.PI;
+            let lon = Math.atan2(dir.y, dir.x) * 180 / Math.PI; if (lon < 0) lon += 360;
+            const { radius, weight } = cascadeRadius(cascade, 0, lat, lon);
+            if (weight > 0) covered++;
+            const ellipsoidRadius = 1 / Math.sqrt((dir.x * dir.x + dir.y * dir.y) * invA + dir.z * dir.z * invC);
+            const height = radius - ellipsoidRadius;
+            heights[row * (TILE_SIZE + 1) + col] = height; min = Math.min(min, height); max = Math.max(max, height);
         }
-        const image=encodeTerrariumGrid(createHeightGrid(TILE_SIZE+1,TILE_SIZE+1,heights));
-        const bytes=await sharp(image.data,{raw:{width:TILE_SIZE+1,height:TILE_SIZE+1,channels:4}}).png({compressionLevel:4}).toBuffer();
-        const path=`datasets/mars/jezero/${id}/elevation/${tile.face}/${lod}/${tile.x}/${tile.y}.png`;
-        const full=resolve(root,path); await mkdir(dirname(full),{recursive:true}); await writeFile(full,bytes);
-        files.push({...tile,minHeight:min,maxHeight:max,path,bytes:bytes.length,sha256:sha256(bytes)});
+        if (covered === 0) continue;
+        const image = encodeTerrariumGrid(createHeightGrid(TILE_SIZE + 1, TILE_SIZE + 1, heights));
+        const bytes = await sharp(image.data, { raw: { width: TILE_SIZE + 1, height: TILE_SIZE + 1, channels: 4 } }).png({ compressionLevel: 4 }).toBuffer();
+        const path = `datasets/mars/jezero/${id}/elevation/${tile.face}/${lod}/${tile.x}/${tile.y}.png`;
+        const full = resolve(root, path); await mkdir(dirname(full), { recursive: true }); await writeFile(full, bytes);
+        files.push({ ...tile, minHeight: min, maxHeight: max, coverage: covered / samples, path, bytes: bytes.length, sha256: sha256(bytes) });
     }
     return files;
 }
+
+/** Removes the tiles of a source that a new build no longer writes. */
+async function removeStale(root: string, id: string, tiles: readonly object[]): Promise<number> {
+    const kept = new Set(tiles.map((tile) => (tile as { path: string }).path));
+    const directory = resolve(root, `datasets/mars/jezero/${id}`);
+    let removed = 0;
+    const walk = async (folder: string): Promise<void> => {
+        for (const entry of await readdir(folder, { withFileTypes: true }).catch(() => [])) {
+            const path = resolve(folder, entry.name);
+            if (entry.isDirectory()) await walk(path);
+            else if (!kept.has(relative(root, path).split(sep).join("/"))) {
+                await unlink(path);
+                removed++;
+            }
+        }
+    };
+    await walk(directory);
+    return removed;
+}
+
+async function cascadeBase(root: string): Promise<Pick<ICascade, "areoid" | "base">> {
+    const [megr, megt, base] = await Promise.all([loadMolaGrid("megr"), loadMolaGrid("megt"), loadMolaRadius16(root)]);
+    return { areoid: (lat, lon) => sampleMola(megr, lat, lon) - sampleMola(megt, lat, lon), base };
+}
+
+const CTX_BOUNDS = { minLat: 17.58, maxLat: 19.29, minLon: 76.99, maxLon: 78.58 };
 
 /**
  * Build an experimental CTX correction as a separate tile source.
@@ -183,23 +282,25 @@ async function buildTiles(root: string, id: string, raster: IRaster, sourceBound
 export async function buildJezeroCtxCorrection(root=DEFAULT_ROOT): Promise<void> {
     const originalPath=resolve(root,"sources/jezero/ctx/M20_JezeroCrater_CTXDEM_20m.tif");
     const correctedPath=resolve(root,"sources/jezero/ctx/Jezero_CTXDEM_20m_correction_experimentale.tif");
-    const [original,corrected,megr,megt]=await Promise.all([loadGeoTiff(originalPath),loadGeoTiff(correctedPath),loadMolaGrid("megr"),loadMolaGrid("megt")]);
+    const [original,corrected,base]=await Promise.all([loadGeoTiff(originalPath),loadGeoTiff(correctedPath),cascadeBase(root)]);
     const sameGrid=original.width===corrected.width&&original.height===corrected.height&&original.originX===corrected.originX&&original.originY===corrected.originY&&original.pixelX===corrected.pixelX&&original.pixelY===corrected.pixelY&&original.standardParallel===corrected.standardParallel;
     if(!sameGrid) throw new Error("Corrected CTX GeoTIFF grid differs from the original; refusing to generate misregistered tiles.");
-    const ctxBounds={minLat:17.58,maxLat:19.29,minLon:76.99,maxLon:78.58};
-    const tiles=await buildTiles(root,"ctx-20m-corrected",corrected,ctxBounds,7,10,megr,megt);
+    const tiles=await buildTiles(root,"ctx-20m-corrected",{...base,sources:[source(corrected,MOLA_16_SPACING)]},CTX_BOUNDS,7,10);
+    const removed=await removeStale(root,"ctx-20m-corrected",tiles);
     const manifestPath=resolve(root,"datasets/mars/jezero/manifest.json");
     const manifest=JSON.parse(await readFile(manifestPath,"utf8")) as {sources:Array<Record<string,unknown>>;generatedAt?:string};
     manifest.sources=manifest.sources.filter((source)=>source.id!=="ctx-20m-corrected");
     manifest.sources.push({id:"ctx-20m-corrected",resolutionMetres:20,file:correctedPath,bytes:(await stat(correctedPath)).size,parentSource:"ctx-20m",quality:"experimental, not scientifically validated",tiles});
     manifest.generatedAt=new Date().toISOString();
     await writeFile(manifestPath,JSON.stringify(manifest,null,2)+"\n");
-    console.log(`Jezero corrected CTX: ${tiles.length} experimental DEM tiles written to ${manifestPath}`);
+    console.log(`Jezero corrected CTX: ${tiles.length} experimental DEM tiles, ${removed} stale removed, written to ${manifestPath}`);
 }
+
 /**
- * Build the Jezero regional DEM refinement as Terrarium-encoded cube tiles.
- * CTX supplies continuous crater coverage; HiRISE extends the rover landing
- * region to metre scale. The output manifest records the exact tile inventory.
+ * Build the Jezero regional DEM refinement as Terrarium-encoded cube tiles, as a cascade of sources: HiRISE where it
+ * has data, CTX below it, and the global MOLA MEGR 16 ppd base below CTX, each blending into the next one over a sample
+ * of it. CTX supplies continuous crater coverage; HiRISE extends the rover landing region to metre scale. The output
+ * manifest records the exact tile inventory and the part of each tile its source covers.
  *
  * @param root - Mars data directory containing imported source rasters.
  * @param maxHiRISELOD - Finest cube level generated for the HiRISE product.
@@ -208,18 +309,28 @@ export async function buildJezeroRefinement(root=DEFAULT_ROOT,maxHiRISELOD=14): 
     if(!Number.isInteger(maxHiRISELOD)||maxHiRISELOD<11||maxHiRISELOD>16) throw new RangeError("HiRISE max LOD must be 11..16.");
     const ctxPath=resolve(root,"sources/jezero/ctx/M20_JezeroCrater_CTXDEM_20m.tif");
     const hiPath=resolve(root,"sources/jezero/hirise/JEZ_hirise_soc_006_DTM_MOLAtopography_DeltaGeoid_1m_Eqc_latTs0_lon0_blend40.tif");
-    const [ctx,hi,megr,megt]=await Promise.all([loadGeoTiff(ctxPath),loadGeoTiff(hiPath),loadMolaGrid("megr"),loadMolaGrid("megt")]);
-    const ctxBounds={minLat:17.58,maxLat:19.29,minLon:76.99,maxLon:78.58};
-    const hiriseBounds=sourceBounds(hi);
-    const ctxTiles=await buildTiles(root,"ctx-20m",ctx,ctxBounds,7,10,megr,megt);
-    const hiTiles=await buildTiles(root,"hirise-1m",hi,hiriseBounds,11,maxHiRISELOD,megr,megt);
-    const manifest={schema:"mars-jezero-refinement/1",body:"Mars",region:"Jezero crater",projection:"planetocentric equirectangular",verticalDatum:"MOLA areoid, radius reconstructed from the smoothed 4 ppd MEGR and MEGT products",tileSize:TILE_SIZE,
+    const [ctx,hi,base]=await Promise.all([loadGeoTiff(ctxPath),loadGeoTiff(hiPath),cascadeBase(root)]);
+    const ctxSource=source(ctx,MOLA_16_SPACING);
+    const hiSource=source(hi,ctx.pixelX);
+    const ctxTiles=await buildTiles(root,"ctx-20m",{...base,sources:[ctxSource]},CTX_BOUNDS,7,10);
+    console.log(`CTX: ${ctxTiles.length} tiles, ${await removeStale(root,"ctx-20m",ctxTiles)} stale removed.`);
+    const hiTiles=await buildTiles(root,"hirise-1m",{...base,sources:[hiSource,ctxSource]},sourceBounds(hi),11,maxHiRISELOD);
+    console.log(`HiRISE: ${hiTiles.length} tiles, ${await removeStale(root,"hirise-1m",hiTiles)} stale removed.`);
+    const manifestPath=resolve(root,"datasets/mars/jezero/manifest.json");
+    const previous=JSON.parse(await readFile(manifestPath,"utf8").catch(()=>'{"sources":[]}')) as {sources:Array<Record<string,unknown>>};
+    const manifest={schema:"mars-jezero-refinement/1",body:"Mars",region:"Jezero crater",projection:"planetocentric equirectangular",
+        verticalDatum:"radial height above the Mars 2000 ellipsoid; regional heights from the MOLA areoid of the smoothed 4 ppd MEGR and MEGT products; where a source has no data, the source below it, down to MOLA MEGR 16 ppd",
+        tileSize:TILE_SIZE,
         tileUrlTemplate:"/mars/datasets/mars/jezero/{source}/elevation/{face}/{lod}/{x}/{y}.png",
-        sources:[{id:"ctx-20m",resolutionMetres:20,url:"https://planetarymaps.usgs.gov/mosaic/mars2020_trn/CTX/ScienceInvestigationMaps_JPL/M20_JezeroCrater_CTXDEM_20m.tif",file:ctxPath,bytes:(await stat(ctxPath)).size,tiles:ctxTiles},{id:"hirise-1m",resolutionMetres:1,url:"https://planetarymaps.usgs.gov/mosaic/mars2020_trn/HiRISE/JEZ_hirise_soc_006_DTM_MOLAtopography_DeltaGeoid_1m_Eqc_latTs0_lon0_blend40.tif",file:hiPath,bytes:(await stat(hiPath)).size,tiles:hiTiles}],
+        sources:[{id:"ctx-20m",resolutionMetres:20,url:"https://planetarymaps.usgs.gov/mosaic/mars2020_trn/CTX/ScienceInvestigationMaps_JPL/M20_JezeroCrater_CTXDEM_20m.tif",file:ctxPath,bytes:(await stat(ctxPath)).size,tiles:ctxTiles},{id:"hirise-1m",resolutionMetres:1,url:"https://planetarymaps.usgs.gov/mosaic/mars2020_trn/HiRISE/JEZ_hirise_soc_006_DTM_MOLAtopography_DeltaGeoid_1m_Eqc_latTs0_lon0_blend40.tif",file:hiPath,bytes:(await stat(hiPath)).size,parentSource:"ctx-20m",tiles:hiTiles},
+            // Other sources, such as the experimental CTX correction, keep their entries until rebuilt.
+            ...previous.sources.filter((entry)=>entry.id!=="ctx-20m"&&entry.id!=="hirise-1m")],
         geoidSources:[
             {id:"MOLA MEGR 4 ppd",file:resolve(MOLA_ROOT,"megr90n000cb.img"),url:"https://pds-geosciences.wustl.edu/missions/mgs/megdr.html"},
             {id:"MOLA MEGT 4 ppd",file:resolve(MOLA_ROOT,"megt90n000cb.img"),url:"https://pds-geosciences.wustl.edu/missions/mgs/megdr.html"},
-        ],generatedAt:new Date().toISOString()};
-    const file=resolve(root,"datasets/mars/jezero/manifest.json"); await mkdir(dirname(file),{recursive:true}); await writeFile(file,JSON.stringify(manifest,null,2)+"\n");
-    console.log(`Jezero: ${ctxTiles.length+hiTiles.length} DEM tiles written to ${file}`);
+        ],
+        baseSource:{id:"MOLA MEGR 16 ppd",file:resolve(root,"sources/mola/meg016/megr90n000eb.img"),url:"https://pds-geosciences.wustl.edu/missions/mgs/megdr.html"},
+        generatedAt:new Date().toISOString()};
+    await mkdir(dirname(manifestPath),{recursive:true}); await writeFile(manifestPath,JSON.stringify(manifest,null,2)+"\n");
+    console.log(`Jezero: ${ctxTiles.length+hiTiles.length} DEM tiles written to ${manifestPath}`);
 }

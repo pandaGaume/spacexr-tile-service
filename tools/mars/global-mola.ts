@@ -9,6 +9,35 @@ const MAX_LOD = 4;
 const WIDTH = 5760;
 const HEIGHT = 2880;
 const PREFIX = "global-mola-16ppd-v1";
+const MEGR16 = "sources/mola/meg016/megr90n000eb.img";
+
+/**
+ * Bilinear MOLA MEGR 16 ppd radius, in metres, at planetocentric degrees, from the big-endian PDS samples. Longitude
+ * wraps; latitude clamps to the polar rows. The global base and the regional refinements share it.
+ */
+export function molaRadiusSampler(bytes: Buffer): (latitude: number, longitude: number) => number {
+    if (bytes.length !== WIDTH * HEIGHT * 2) throw new Error("Invalid MOLA MEGR 16 ppd raster");
+    return (latitude, longitude) => {
+        const px = (((longitude % 360) + 360) % 360) * 16 - 0.5;
+        const py = (90 - latitude) * 16 - 0.5;
+        const x = Math.floor(px),
+            y = Math.floor(py),
+            fx = px - x,
+            fy = py - y;
+        const value = (dx: number, dy: number) =>
+            bytes.readInt16BE((Math.max(0, Math.min(HEIGHT - 1, y + dy)) * WIDTH + ((x + dx + WIDTH) % WIDTH)) * 2);
+        return (
+            3396000 +
+            (value(0, 0) * (1 - fx) + value(1, 0) * fx) * (1 - fy) +
+            (value(0, 1) * (1 - fx) + value(1, 1) * fx) * fy
+        );
+    };
+}
+
+/** {@link molaRadiusSampler} over the MEGR 16 ppd raster of a Mars data root. */
+export async function loadMolaRadius16(root: string): Promise<(latitude: number, longitude: number) => number> {
+    return molaRadiusSampler(await readFile(resolve(root, MEGR16)));
+}
 
 /** Global MOLA radii, reprojected along planetocentric rays onto Mars 2000. */
 export class GlobalMola {
@@ -19,7 +48,7 @@ export class GlobalMola {
 
     public async available(): Promise<boolean> {
         try {
-            return (await stat(resolve(this.root, "sources/mola/meg016/megr90n000eb.img"))).size === WIDTH * HEIGHT * 2;
+            return (await stat(resolve(this.root, MEGR16))).size === WIDTH * HEIGHT * 2;
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
             throw error;
@@ -65,7 +94,7 @@ export class GlobalMola {
     }
 
     private async build(address: ITileAddress): Promise<Buffer> {
-        const bytes = await (this.grid ??= readFile(resolve(this.root, "sources/mola/meg016/megr90n000eb.img"))
+        const bytes = await (this.grid ??= readFile(resolve(this.root, MEGR16))
             .then((data) => {
                 if (data.length !== WIDTH * HEIGHT * 2) throw new Error("Invalid MOLA MEGR 16 ppd raster");
                 return data;
@@ -74,21 +103,7 @@ export class GlobalMola {
                 this.grid = undefined;
                 throw error;
             }));
-        const sample = (latitude: number, longitude: number): number => {
-            const px = (((longitude % 360) + 360) % 360) * 16 - 0.5;
-            const py = (90 - latitude) * 16 - 0.5;
-            const x = Math.floor(px),
-                y = Math.floor(py),
-                fx = px - x,
-                fy = py - y;
-            const value = (dx: number, dy: number) =>
-                bytes.readInt16BE((Math.max(0, Math.min(HEIGHT - 1, y + dy)) * WIDTH + ((x + dx + WIDTH) % WIDTH)) * 2);
-            return (
-                3396000 +
-                (value(0, 0) * (1 - fx) + value(1, 0) * fx) * (1 - fy) +
-                (value(0, 1) * (1 - fx) + value(1, 1) * fx) * fy
-            );
-        };
+        const sample = molaRadiusSampler(bytes);
         const heights = new Float32Array((SIZE + 1) ** 2);
         for (let y = 0; y <= SIZE; y++)
             for (let x = 0; x <= SIZE; x++) {

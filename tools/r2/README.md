@@ -79,3 +79,29 @@ Verify the numeric DEM and every shared edge locally:
 ```powershell
 npx tsx tools/r2/verify-dem.ts
 ```
+
+## Generated Moon and Mars cube data
+
+To publish the current verified lunar pyramid, its Shackleton refinement, and the Jezero tile inventory to the `planetary-tiles` R2 bucket:
+
+```powershell
+npx tsx tools/r2/publish-generated-cube.ts
+```
+
+The script reads `F:/LunarData` and `F:/MarsData`, then preserves their relative dataset paths below `cube/moon/` and `cube/mars/`. It uploads the selected lunar revision only, validates manifest tile sizes, excludes source GeoTIFFs, and stores a resumable receipt under `.local/r2-cube/`. If an upload is interrupted, rerun the command. Use `--concurrency 8` to adjust parallel uploads. The publication index is `cube/catalog.json`.
+
+Mars is also published as one global revision on the cube, readable by a cube client from its `elevation.json`. Build it first:
+
+```powershell
+npm run mars -- global-cube
+```
+
+It writes `datasets/mars/global-<revision>/` under the Mars root: MOLA MEGR 16 ppd on every face down to level 4, the Jezero CTX tiles from level 7 to 10 and HiRISE from level 11, in one tree with the template `./elevation/{face}/{z}/{x}/{y}.png`. Heights are radial above the Mars 2000 ellipsoid, `referenceRadii` 3396190, 3396190 and 3376200 metres. Jezero is produced as a cascade (`npm run mars -- jezero-refine`): HiRISE where it has data, CTX below it, MOLA MEGR 16 ppd below CTX, each blending into the next over one sample of it; a tile holding no sample of its own source is not written. The build refuses such a tile, compares every tile below the global levels with the deepest tile containing it, and verifies every border two tiles of a level share. The descriptor declares Jezero as subtrees only as deep as each is complete. `catalog/latest-global.json` then points at the revision, and the publication uploads it below `cube/mars/` with its pointer `cube/mars/catalog/latest-global.json`. Mars has no imagery tiles yet.
+
+Use `--dry-run` to validate the current source manifests and print the destination prefix without uploading:
+
+```powershell
+npx tsx tools/r2/publish-generated-cube.ts --dry-run
+```
+The uploader omits `.rows` build-time indexes because the HTTP tile server does not expose or read them.
+Uploads use a temporary loopback Wrangler dev server with a remote R2 binding. The Worker is never deployed; its random bearer token and configuration are removed when the transfer finishes.
