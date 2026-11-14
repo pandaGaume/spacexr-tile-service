@@ -3,6 +3,7 @@ import { dirname, extname, relative, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { randomBytes } from "node:crypto";
+import { MARS_REGIONS, REGIONAL_SCHEMA } from "../mars/regional-refinement";
 
 interface IObject {
     key: string;
@@ -55,11 +56,16 @@ function toKey(path: string): string {
 
 function contentType(path: string): string {
     switch (extname(path).toLowerCase()) {
-        case ".png": return "image/png";
-        case ".webp": return "image/webp";
-        case ".json": return "application/json";
-        case ".html": return "text/html; charset=utf-8";
-        default: return "application/octet-stream";
+        case ".png":
+            return "image/png";
+        case ".webp":
+            return "image/webp";
+        case ".json":
+            return "application/json";
+        case ".html":
+            return "text/html; charset=utf-8";
+        default:
+            return "application/octet-stream";
     }
 }
 
@@ -73,7 +79,12 @@ async function walk(directory: string): Promise<string[]> {
     return output;
 }
 
-async function addObject(objects: Map<string, IObject>, key: string, file: string, expectedBytes?: number): Promise<void> {
+async function addObject(
+    objects: Map<string, IObject>,
+    key: string,
+    file: string,
+    expectedBytes?: number,
+): Promise<void> {
     const details = await stat(file);
     if (!details.isFile()) throw new Error(`Not a regular file: ${file}`);
     if (expectedBytes !== undefined && details.size !== expectedBytes)
@@ -97,7 +108,7 @@ async function addObject(objects: Map<string, IObject>, key: string, file: strin
 function portableSourcePath(value: string): string {
     const segments = value.split(/[\\/]+/).filter(Boolean);
     const sourceIndex = segments.findIndex((segment) => segment.toLowerCase() === "sources");
-    return sourceIndex >= 0 ? segments.slice(sourceIndex).join("/") : segments.at(-1) ?? value;
+    return sourceIndex >= 0 ? segments.slice(sourceIndex).join("/") : (segments.at(-1) ?? value);
 }
 
 async function collectMoon(root: string, objects: Map<string, IObject>): Promise<{ revision: string; tiles: number }> {
@@ -113,7 +124,11 @@ async function collectMoon(root: string, objects: Map<string, IObject>): Promise
         revision: string;
         files: Array<{ path: string; bytes: number }>;
     };
-    if (manifest.schema !== "lunar-global/1" || manifest.status !== "verified" || manifest.revision !== pointer.revision)
+    if (
+        manifest.schema !== "lunar-global/1" ||
+        manifest.status !== "verified" ||
+        manifest.revision !== pointer.revision
+    )
         throw new Error("The current lunar publication is not verified.");
     const expected = new Map(manifest.files.map((file) => [file.path, file.bytes]));
     for (const file of await walk(directory)) {
@@ -126,33 +141,58 @@ async function collectMoon(root: string, objects: Map<string, IObject>): Promise
     return { revision: pointer.revision, tiles: manifest.files.length };
 }
 
-async function collectMars(root: string, objects: Map<string, IObject>, staging: string): Promise<{ sources: string[]; tiles: number }> {
-    const dataset = resolve(root, "datasets/mars/jezero");
-    const manifestPath = resolve(dataset, "manifest.json");
-    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
-        schema: string;
-        sources: Array<{ id: string; tiles: Array<{ path: string; bytes: number }> ; file?: string }>;
-        geoidSources?: Array<{ file?: string }>;
-    };
-    if (manifest.schema !== "mars-jezero-refinement/1") throw new Error("Unsupported Jezero manifest schema.");
-    const expected = new Map(manifest.sources.flatMap((source) => source.tiles.map((tile) => [toKey(tile.path), tile.bytes] as const)));
-    const portable = structuredClone(manifest);
-    for (const source of portable.sources) if (source.file) source.file = portableSourcePath(source.file);
-    for (const source of portable.geoidSources ?? []) if (source.file) source.file = portableSourcePath(source.file);
-    await mkdir(staging, { recursive: true });
-    const safeManifest = resolve(staging, "mars-jezero-manifest.json");
-    await writeFile(safeManifest, `${JSON.stringify(portable, null, 2)}\n`);
-    await addObject(objects, "cube/mars/datasets/mars/jezero/manifest.json", safeManifest);
-    for (const file of await walk(dataset)) {
-        if (file.toLowerCase() === manifestPath.toLowerCase()) continue;
-        const relativePath = toKey(relative(root, file));
-        await addObject(objects, `cube/mars/${relativePath}`, file, expected.get(relativePath));
+/** The regional refinements of Mars, each with its manifest made portable and its tiles. */
+async function collectMars(
+    root: string,
+    objects: Map<string, IObject>,
+    staging: string,
+): Promise<{ sources: string[]; tiles: number }> {
+    const sources: string[] = [];
+    let tiles = 0;
+    for (const region of MARS_REGIONS) {
+        const dataset = resolve(root, `datasets/mars/${region.id}`);
+        const manifestPath = resolve(dataset, "manifest.json");
+        const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as {
+            schema: string;
+            region: string;
+            sources: Array<{ id: string; tiles: Array<{ path: string; bytes: number }>; file?: string }>;
+            geoidSources?: Array<{ file?: string }>;
+            baseSource?: { file?: string };
+        };
+        if (manifest.schema !== REGIONAL_SCHEMA || manifest.region !== region.id)
+            throw new Error(`Unsupported ${region.id} manifest.`);
+        const expected = new Map(
+            manifest.sources.flatMap((source) => source.tiles.map((tile) => [toKey(tile.path), tile.bytes] as const)),
+        );
+        const portable = structuredClone(manifest);
+        for (const source of portable.sources) if (source.file) source.file = portableSourcePath(source.file);
+        for (const source of portable.geoidSources ?? [])
+            if (source.file) source.file = portableSourcePath(source.file);
+        if (portable.baseSource?.file) portable.baseSource.file = portableSourcePath(portable.baseSource.file);
+        await mkdir(staging, { recursive: true });
+        const safeManifest = resolve(staging, `mars-${region.id}-manifest.json`);
+        await writeFile(
+            safeManifest,
+            `${JSON.stringify(portable, null, 2)}
+`,
+        );
+        await addObject(objects, `cube/mars/datasets/mars/${region.id}/manifest.json`, safeManifest);
+        for (const file of await walk(dataset)) {
+            if (file.toLowerCase() === manifestPath.toLowerCase()) continue;
+            const relativePath = toKey(relative(root, file));
+            await addObject(objects, `cube/mars/${relativePath}`, file, expected.get(relativePath));
+        }
+        sources.push(...manifest.sources.map((source) => `${region.id}/${source.id}`));
+        tiles += expected.size;
     }
-    return { sources: manifest.sources.map((source) => source.id), tiles: expected.size };
+    return { sources, tiles };
 }
 
 /** The global Mars revision of `npm run mars -- global-cube`, when one was built: its tree, then its pointer. */
-async function collectMarsGlobal(root: string, objects: Map<string, IObject>): Promise<{ revision: string; tiles: number } | undefined> {
+async function collectMarsGlobal(
+    root: string,
+    objects: Map<string, IObject>,
+): Promise<{ revision: string; tiles: number } | undefined> {
     const pointerPath = resolve(root, "catalog/latest-global.json");
     let pointer: { directory: string; revision: string };
     try {
@@ -194,7 +234,8 @@ async function uploadOne(baseUrl: string, token: string, object: IObject): Promi
         body: await readFile(object.file),
         signal: AbortSignal.timeout(120000),
     });
-    if (!response.ok) throw new Error(`R2 upload failed for ${object.key}: HTTP ${response.status} ${await response.text()}`);
+    if (!response.ok)
+        throw new Error(`R2 upload failed for ${object.key}: HTTP ${response.status} ${await response.text()}`);
 }
 
 async function uploadWithRetry(baseUrl: string, token: string, object: IObject): Promise<void> {
@@ -217,11 +258,14 @@ async function availablePort(): Promise<number> {
     });
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Could not reserve a local uploader port.");
-    await new Promise<void>((accept, reject) => server.close((error) => error ? reject(error) : accept()));
+    await new Promise<void>((accept, reject) => server.close((error) => (error ? reject(error) : accept())));
     return address.port;
 }
 
-async function startLocalUploader(bucket: string, directory: string): Promise<{ baseUrl: string; token: string; child: ReturnType<typeof spawn>; configPath: string }> {
+async function startLocalUploader(
+    bucket: string,
+    directory: string,
+): Promise<{ baseUrl: string; token: string; child: ReturnType<typeof spawn>; configPath: string }> {
     const port = await availablePort();
     const token = randomBytes(32).toString("hex");
     const configPath = resolve(directory, "wrangler-upload.jsonc");
@@ -234,12 +278,27 @@ async function startLocalUploader(bucket: string, directory: string): Promise<{ 
         r2_buckets: [{ binding: "BUCKET", bucket_name: bucket, remote: true }],
     };
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    const child = spawn(process.execPath, [resolve("node_modules/wrangler/bin/wrangler.js"), "dev", "--config", configPath, "--ip", "127.0.0.1", "--port", String(port)], {
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-    });
+    const child = spawn(
+        process.execPath,
+        [
+            resolve("node_modules/wrangler/bin/wrangler.js"),
+            "dev",
+            "--config",
+            configPath,
+            "--ip",
+            "127.0.0.1",
+            "--port",
+            String(port),
+        ],
+        {
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+        },
+    );
     let output = "";
-    const capture = (chunk: Buffer) => { if (output.length < 6000) output += chunk.toString(); };
+    const capture = (chunk: Buffer) => {
+        if (output.length < 6000) output += chunk.toString();
+    };
     child.stdout?.on("data", capture);
     child.stderr?.on("data", capture);
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -249,7 +308,9 @@ async function startLocalUploader(bucket: string, directory: string): Promise<{ 
             try {
                 const response = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1000) });
                 if (response.ok && (await response.text()) === "ok") return { baseUrl, token, child, configPath };
-            } catch { /* Wrangler is still starting. */ }
+            } catch {
+                /* Wrangler is still starting. */
+            }
             await new Promise((accept) => setTimeout(accept, 500));
         }
         throw new Error(`Local R2 uploader did not become ready: ${output}`);
@@ -282,31 +343,62 @@ async function main(): Promise<void> {
     const mars = await collectMars(marsRoot, objects, resolve(runDirectory, "staging"));
     const marsGlobal = await collectMarsGlobal(marsRoot, objects);
     const indexPath = resolve(runDirectory, "cube-catalog.json");
-    await writeFile(indexPath, `${JSON.stringify({
-        schema: "spacexr-planetary-cube-catalog/1",
-        bodies: {
-            moon: { prefix: "cube/moon/", latestPublication: "cube/moon/catalog/latest-global.json", revision: moon.revision },
-            mars: {
-                prefix: "cube/mars/",
-                ...(marsGlobal
-                    ? { latestPublication: "cube/mars/catalog/latest-global.json", revision: marsGlobal.revision }
-                    : {}),
-                manifest: "cube/mars/datasets/mars/jezero/manifest.json",
-                region: "Jezero",
+    await writeFile(
+        indexPath,
+        `${JSON.stringify(
+            {
+                schema: "spacexr-planetary-cube-catalog/1",
+                bodies: {
+                    moon: {
+                        prefix: "cube/moon/",
+                        latestPublication: "cube/moon/catalog/latest-global.json",
+                        revision: moon.revision,
+                    },
+                    mars: {
+                        prefix: "cube/mars/",
+                        ...(marsGlobal
+                            ? {
+                                  latestPublication: "cube/mars/catalog/latest-global.json",
+                                  revision: marsGlobal.revision,
+                              }
+                            : {}),
+                        regions: Object.fromEntries(
+                            MARS_REGIONS.map((region) => [
+                                region.id,
+                                `cube/mars/datasets/mars/${region.id}/manifest.json`,
+                            ]),
+                        ),
+                    },
+                },
             },
-        },
-    }, null, 2)}\n`);
+            null,
+            2,
+        )}\n`,
+    );
     await addObject(objects, "cube/catalog.json", indexPath);
 
     const receiptPath = resolve(runDirectory, "publication.json");
-    const receipt = Array.from(objects.values()).map(({ key, file, bytes, modified }) => ({ key, file, bytes, modified }));
-    await writeFile(receiptPath, `${JSON.stringify({ bucket: options.bucket, prefix: PREFIX, moon, mars, marsGlobal, objects: receipt }, null, 2)}\n`);
+    const receipt = Array.from(objects.values()).map(({ key, file, bytes, modified }) => ({
+        key,
+        file,
+        bytes,
+        modified,
+    }));
+    await writeFile(
+        receiptPath,
+        `${JSON.stringify({ bucket: options.bucket, prefix: PREFIX, moon, mars, marsGlobal, objects: receipt }, null, 2)}\n`,
+    );
     const checkpointPath = resolve(runDirectory, "completed.jsonl");
     const completed = new Map<string, IReceiptLine>();
     try {
         for (const line of (await readFile(checkpointPath, "utf8")).split(/\r?\n/)) {
             if (!line) continue;
-            try { const item = JSON.parse(line) as IReceiptLine; completed.set(item.key, item); } catch { /* Ignore a partial final checkpoint line. */ }
+            try {
+                const item = JSON.parse(line) as IReceiptLine;
+                completed.set(item.key, item);
+            } catch {
+                /* Ignore a partial final checkpoint line. */
+            }
         }
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -316,12 +408,17 @@ async function main(): Promise<void> {
         return !previous || previous.bytes !== object.bytes || previous.modified !== object.modified;
     });
     const totalBytes = Array.from(objects.values()).reduce((sum, object) => sum + object.bytes, 0);
-    console.log(`R2 publication: ${options.bucket}/cube, ${objects.size} objects, ${(totalBytes / 1e9).toFixed(2)} GB.`);
-    console.log(`Moon: ${moon.tiles} tiles at revision ${moon.revision}. Mars: ${mars.tiles} tiles (${mars.sources.join(", ")}).`);
+    console.log(
+        `R2 publication: ${options.bucket}/cube, ${objects.size} objects, ${(totalBytes / 1e9).toFixed(2)} GB.`,
+    );
+    console.log(
+        `Moon: ${moon.tiles} tiles at revision ${moon.revision}. Mars: ${mars.tiles} tiles (${mars.sources.join(", ")}).`,
+    );
     if (marsGlobal) console.log(`Mars global: ${marsGlobal.tiles} tiles at revision ${marsGlobal.revision}.`);
     console.log(`Uploading ${queue.length} remaining objects with concurrency ${options.concurrency}.`);
     if (options.dryRun) {
-        for (const object of Array.from(objects.values()).slice(0, 12)) console.log(`${object.key} (${object.bytes} bytes)`);
+        for (const object of Array.from(objects.values()).slice(0, 12))
+            console.log(`${object.key} (${object.bytes} bytes)`);
         console.log("Dry run complete. No R2 objects were changed.");
         return;
     }
@@ -344,7 +441,9 @@ async function main(): Promise<void> {
                 if (!object) return;
                 try {
                     await uploadWithRetry(localUploader.baseUrl, localUploader.token, object);
-                    pendingLines.push(JSON.stringify({ key: object.key, bytes: object.bytes, modified: object.modified }));
+                    pendingLines.push(
+                        JSON.stringify({ key: object.key, bytes: object.bytes, modified: object.modified }),
+                    );
                     if (pendingLines.length >= 32) await flush();
                     uploaded++;
                     if (uploaded % 500 === 0) {
@@ -373,7 +472,9 @@ async function main(): Promise<void> {
         uploadedAt: new Date().toISOString(),
     };
     await writeFile(resolve(runDirectory, "latest.json"), `${JSON.stringify(summary, null, 2)}\n`);
-    console.log(`Complete: ${objects.size} objects, ${(totalBytes / 1e9).toFixed(2)} GB uploaded to ${options.bucket}/cube/.`);
+    console.log(
+        `Complete: ${objects.size} objects, ${(totalBytes / 1e9).toFixed(2)} GB uploaded to ${options.bucket}/cube/.`,
+    );
     console.log(`Resume receipt: ${receiptPath}`);
 }
 

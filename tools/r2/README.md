@@ -96,12 +96,24 @@ Mars is also published as one global revision on the cube, readable by a cube cl
 npm run mars -- global-cube
 ```
 
-It writes `datasets/mars/global-<revision>/` under the Mars root: MOLA MEGR 16 ppd on every face down to level 4, the Jezero CTX tiles from level 7 to 10 and HiRISE from level 11, in one tree with the template `./elevation/{face}/{z}/{x}/{y}.png`. Heights are radial above the Mars 2000 ellipsoid, `referenceRadii` 3396190, 3396190 and 3376200 metres. Jezero is produced as a cascade (`npm run mars -- jezero-refine`): HiRISE where it has data, CTX below it, MOLA MEGR 16 ppd below CTX, each blending into the next over one sample of it; a tile holding no sample of its own source is not written. The build refuses such a tile, compares every tile below the global levels with the deepest tile containing it, and verifies every border two tiles of a level share. The descriptor declares Jezero as subtrees only as deep as each is complete. `catalog/latest-global.json` then points at the revision, and the publication uploads it below `cube/mars/` with its pointer `cube/mars/catalog/latest-global.json`. Mars has no imagery tiles yet.
+It writes `datasets/mars/global-<revision>/` under the Mars root: MOLA MEGR 16 ppd on every face down to level 4, then the regional refinements, in one tree with the template `./elevation/{face}/{z}/{x}/{y}.png`. Heights are radial above the Mars 2000 ellipsoid, `referenceRadii` 3396190, 3396190 and 3376200 metres.
+
+The regions are listed in `tools/mars/regional-refinement.ts` and built with `npm run mars -- refine` (or `--region jezero`, `--region utopia`):
+
+| Region                                  | Sources, coarsest first      | Levels            |
+| --------------------------------------- | ---------------------------- | ----------------- |
+| Jezero crater                           | CTX DEM 20 m, HiRISE DTM 1 m | 5 to 10, 11 to 14 |
+| Utopia Planitia, Zhurong landing region | Tianwen-1 HiRIC DEM 3.5 m    | 5 to 12           |
+
+Each region is a cascade: a source gives the heights where it has data, the coarser sources of its region below it, then MOLA MEGR 16 ppd, each blending into the next over one sample of it. The heights of every source are measured from the MOLA areoid. The first source of a region starts right below the global levels, each next one right below the previous, and each ends at the deepest level whose samples are not finer than its own. A tile holding no sample of its own source is not written. Each region keeps its manifest, `datasets/mars/<region>/manifest.json` (schema `mars-regional-refinement/1`).
+
+The global build refuses a regional tile without data of its own, compares every tile below the global levels with the deepest tile containing it, and verifies every border two tiles of a level share. The descriptor declares the regions as subtrees only as deep as each is complete. `catalog/latest-global.json` then points at the revision, and the publication uploads it below `cube/mars/` with its pointer `cube/mars/catalog/latest-global.json`, and each regional manifest. Mars has no imagery tiles yet.
 
 Use `--dry-run` to validate the current source manifests and print the destination prefix without uploading:
 
 ```powershell
 npx tsx tools/r2/publish-generated-cube.ts --dry-run
 ```
+
 The uploader omits `.rows` build-time indexes because the HTTP tile server does not expose or read them.
 Uploads use a temporary loopback Wrangler dev server with a remote R2 binding. The Worker is never deployed; its random bearer token and configuration are removed when the transfer finishes.

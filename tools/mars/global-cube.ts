@@ -6,17 +6,14 @@ import { CUBE_FACE_EDGES, cubeTileNeighbor } from "@spacexr/tiles/cube";
 import { TileNeighbor, type ITileAddress } from "@spacexr/tiles/addressing";
 import { borderHashes } from "../lunar/global-kernel";
 import { sha256, storagePath, writeJson } from "../lunar/storage";
-import { GlobalMola } from "./global-mola";
+import { GlobalMola, MOLA_MAX_LOD } from "./global-mola";
+import { MARS_REGIONS, REGIONAL_SCHEMA } from "./regional-refinement";
 
 const TILE_SIZE = 256;
 const SIDE = TILE_SIZE + 1;
-const MOLA_MAX_LOD = 4;
 const MARS_2000: readonly [number, number, number] = [3396190, 3396190, 3376200];
 const FRAME = "IAU_MARS";
-/** Jezero sources merged into the global tree, finest last: they cover disjoint levels. */
-const JEZERO_SOURCES = ["ctx-20m", "hirise-1m"] as const;
-
-interface IJezeroTile {
+interface IRegionalTile {
     face: number;
     lod: number;
     x: number;
@@ -30,9 +27,10 @@ interface IJezeroTile {
     sha256: string;
 }
 
-interface IJezeroManifest {
+interface IRegionalManifest {
     schema: string;
-    sources: Array<{ id: string; url?: string; resolutionMetres: number; tiles: IJezeroTile[] }>;
+    region: string;
+    sources: Array<{ id: string; url?: string; credit?: string; resolutionMetres: number; tiles: IRegionalTile[] }>;
 }
 
 /** One elevation tile of the global Mars tree. */
@@ -68,10 +66,13 @@ export interface IMarsGlobalManifest {
     createdAt: string;
     sources: Array<{
         id: string;
+        /** Region of a regional source, absent for the global base. */
+        region?: string;
         minLOD: number;
         maxLOD: number;
         resolutionMetres: number;
         url?: string;
+        credit?: string;
         tiles: number;
     }>;
     files: IMarsGlobalFile[];
@@ -237,20 +238,26 @@ async function place(source: string, target: string): Promise<void> {
 }
 
 /**
- * Builds an immutable global revision of Mars on the cube index: MOLA MEGR 16 ppd everywhere down to level 4, the
- * Jezero CTX refinement from level 7 to 10 and HiRISE from level 11, in one tree with a single URL template. Heights
+ * Builds an immutable global revision of Mars on the cube index: MOLA MEGR 16 ppd everywhere down to level 4, then the
+ * sources of every region of {@link MARS_REGIONS} on their own levels, in one tree with a single URL template. Heights
  * are radial above the Mars 2000 ellipsoid in every source. Writes `datasets/mars/global-<revision>/` with its
  * `elevation.json` descriptor and manifest, then `catalog/latest-global.json`.
  *
- * @param root - Mars data directory holding the MOLA source and the Jezero refinement.
+ * @param root - Mars data directory holding the MOLA source and the regional refinements.
  */
 export async function buildGlobalMars(root: string): Promise<string> {
     const mola = new GlobalMola(root);
     if (!(await mola.available())) throw new Error("The MOLA MEGR 16 ppd raster is missing under sources/mola/meg016.");
-    const jezero = JSON.parse(
-        await readFile(storagePath(root, "datasets/mars/jezero/manifest.json"), "utf8"),
-    ) as IJezeroManifest;
-    if (jezero.schema !== "mars-jezero-refinement/1") throw new Error("Unsupported Jezero manifest schema.");
+    const regions = await Promise.all(
+        MARS_REGIONS.map(async (region) => {
+            const manifest = JSON.parse(
+                await readFile(storagePath(root, `datasets/mars/${region.id}/manifest.json`), "utf8"),
+            ) as IRegionalManifest;
+            if (manifest.schema !== REGIONAL_SCHEMA || manifest.region !== region.id)
+                throw new Error(`Rebuild the ${region.id} refinement: npm run mars -- refine --region ${region.id}`);
+            return { region, manifest };
+        }),
+    );
 
     const work = storagePath(root, `work/mars-global-${randomUUID()}`);
     const files: IMarsGlobalFile[] = [];
@@ -290,48 +297,53 @@ export async function buildGlobalMars(root: string): Promise<string> {
         console.log(`MOLA: ${molaTiles} tiles, levels 0-${MOLA_MAX_LOD}.`);
 
         const taken = new Set(files.map((file) => key(file.address)));
-        for (const id of JEZERO_SOURCES) {
-            const source = jezero.sources.find((candidate) => candidate.id === id);
-            if (!source) throw new Error(`The Jezero manifest has no ${id} source.`);
-            for (const tile of source.tiles) {
-                const address = { face: tile.face, lod: tile.lod, x: tile.x, y: tile.y };
-                if (address.lod <= MOLA_MAX_LOD)
-                    throw new Error(`${id} tile ${key(address)} overlaps the global levels.`);
-                if (taken.has(key(address)))
-                    throw new Error(`${id} tile ${key(address)} is already taken by another source.`);
-                const file = storagePath(root, tile.path);
-                const png = await readFile(file);
-                if (png.length !== tile.bytes || sha256(png) !== tile.sha256)
-                    throw new Error(`${tile.path} differs from its Jezero manifest entry.`);
-                // A tile with none of its own data would hide the source below it.
-                if (tile.coverage === undefined)
-                    throw new Error(`${tile.path} has no coverage: rebuild the Jezero refinement.`);
-                if (tile.coverage === 0) throw new Error(`${tile.path} holds no sample of ${id}.`);
-                const path = `elevation/${key(address)}.png`;
-                await place(file, resolve(work, path));
-                files.push({
-                    kind: "elevation",
-                    address,
-                    path,
-                    bytes: png.length,
-                    sha256: tile.sha256,
-                    source: id,
-                    coverage: tile.coverage,
-                    ...(await inspect(png)),
+        for (const { region, manifest } of regions)
+            for (const { id } of region.sources) {
+                const source = manifest.sources.find((candidate) => candidate.id === id);
+                if (!source) throw new Error(`The ${region.id} manifest has no ${id} source.`);
+                for (const tile of source.tiles) {
+                    const address = { face: tile.face, lod: tile.lod, x: tile.x, y: tile.y };
+                    if (address.lod <= MOLA_MAX_LOD)
+                        throw new Error(`${id} tile ${key(address)} overlaps the global levels.`);
+                    if (taken.has(key(address)))
+                        throw new Error(`${id} tile ${key(address)} is already taken by another source.`);
+                    const file = storagePath(root, tile.path);
+                    const png = await readFile(file);
+                    if (png.length !== tile.bytes || sha256(png) !== tile.sha256)
+                        throw new Error(`${tile.path} differs from its ${region.id} manifest entry.`);
+                    // A tile with none of its own data would hide the source below it.
+                    if (tile.coverage === undefined)
+                        throw new Error(`${tile.path} has no coverage: rebuild the ${region.id} refinement.`);
+                    if (tile.coverage === 0) throw new Error(`${tile.path} holds no sample of ${id}.`);
+                    const path = `elevation/${key(address)}.png`;
+                    await place(file, resolve(work, path));
+                    files.push({
+                        kind: "elevation",
+                        address,
+                        path,
+                        bytes: png.length,
+                        sha256: tile.sha256,
+                        source: id,
+                        coverage: tile.coverage,
+                        ...(await inspect(png)),
+                    });
+                    taken.add(key(address));
+                }
+                const levels = source.tiles.map((tile) => tile.lod);
+                sources.push({
+                    id,
+                    region: region.id,
+                    minLOD: Math.min(...levels),
+                    maxLOD: Math.max(...levels),
+                    resolutionMetres: source.resolutionMetres,
+                    ...(source.url ? { url: source.url } : {}),
+                    ...(source.credit ? { credit: source.credit } : {}),
+                    tiles: source.tiles.length,
                 });
-                taken.add(key(address));
+                console.log(
+                    `${region.id} ${id}: ${source.tiles.length} tiles, levels ${Math.min(...levels)}-${Math.max(...levels)}.`,
+                );
             }
-            const levels = source.tiles.map((tile) => tile.lod);
-            sources.push({
-                id,
-                minLOD: Math.min(...levels),
-                maxLOD: Math.max(...levels),
-                resolutionMetres: source.resolutionMetres,
-                ...(source.url ? { url: source.url } : {}),
-                tiles: source.tiles.length,
-            });
-            console.log(`${id}: ${source.tiles.length} tiles, levels ${Math.min(...levels)}-${Math.max(...levels)}.`);
-        }
 
         const sharedBordersVerified = verifyBorders(files);
         await compareWithParents(files, work, MOLA_MAX_LOD);
@@ -363,7 +375,7 @@ export async function buildGlobalMars(root: string): Promise<string> {
             frame: FRAME,
             referenceRadii: MARS_2000,
             verticalDatum:
-                "radial height above the Mars 2000 ellipsoid; Jezero tiles blend into MOLA 4 ppd at their edges",
+                "radial height above the Mars 2000 ellipsoid; each regional source blends into the source below it at the limit of its data, down to MOLA MEGR 16 ppd",
             createdAt: new Date().toISOString(),
             sources,
             files,

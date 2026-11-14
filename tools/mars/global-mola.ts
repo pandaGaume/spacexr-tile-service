@@ -5,7 +5,8 @@ import { createHeightGrid, encodeTerrariumGrid } from "@spacexr/dem";
 import { cubeTileDirection, type ITileAddress } from "@spacexr/tiles";
 
 const SIZE = 256;
-const MAX_LOD = 4;
+/** Deepest level of the global MOLA base: the regional refinements start right below it. */
+export const MOLA_MAX_LOD = 4;
 const WIDTH = 5760;
 const HEIGHT = 2880;
 const PREFIX = "global-mola-16ppd-v1";
@@ -58,7 +59,7 @@ export class GlobalMola {
     public source() {
         const tiles = [];
         for (let face = 0; face < 6; face++)
-            for (let lod = 0; lod <= MAX_LOD; lod++)
+            for (let lod = 0; lod <= MOLA_MAX_LOD; lod++)
                 for (let y = 0; y < 2 ** lod; y++)
                     for (let x = 0; x < 2 ** lod; x++)
                         tiles.push({
@@ -77,7 +78,7 @@ export class GlobalMola {
         const match = new RegExp(`^/${PREFIX}/([0-5])/(\\d+)/(\\d+)/(\\d+)\\.png$`).exec(path);
         if (!match) return undefined;
         const [face, lod, x, y] = match.slice(1).map(Number) as [number, number, number, number];
-        return lod <= MAX_LOD && x < 2 ** lod && y < 2 ** lod ? { face, lod, x, y } : undefined;
+        return lod <= MOLA_MAX_LOD && x < 2 ** lod && y < 2 ** lod ? { face, lod, x, y } : undefined;
     }
 
     public tile(address: ITileAddress): Promise<Buffer> {
