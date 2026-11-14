@@ -41,7 +41,7 @@ export async function loadGlobalManifest(root: string): Promise<{ directory: str
 }
 
 /** Serve public-source global tiles on loopback, with CORS and stable revision URLs for engine tests. */
-export function createGlobalServer(root: string): Server {
+export function createGlobalServer(root: string, basePath = ""): Server {
     let publication: Awaited<ReturnType<typeof loadGlobalManifest>> | undefined;
     let files: Map<string, IGlobalFile> | undefined;
     const server = createServer(async (request, response) => {
@@ -56,7 +56,8 @@ export function createGlobalServer(root: string): Server {
         try {
             let bytes: Buffer;
             if (path === "/") {
-                bytes = Buffer.from(PAGE);
+                const page = basePath ? PAGE.replace(/(['"])\/(?=[^/])/g, `$1${basePath}/`) : PAGE;
+                bytes = Buffer.from(page);
                 response.setHeader("Content-Type", "text/html; charset=utf-8");
             } else if (path === "/status.json") {
                 try {
@@ -142,9 +143,10 @@ export function createGlobalServer(root: string): Server {
                     const descriptor = JSON.parse(await readFile(storagePath(root, `${directory}${path}`), "utf8")) as {
                         tiles: string;
                     };
-                    const address = server.address();
-                    if (!address || typeof address === "string") throw new Error("Server is not listening");
-                    descriptor.tiles = `http://127.0.0.1:${address.port}/${manifest.revision}/${descriptor.tiles.replace(/^\.\//, "")}`;
+                    const host = request.headers.host;
+                    if (!host) throw new Error("Request host is required to build a tile URL");
+                    const protocol = request.headers["x-forwarded-proto"] === "https" ? "https" : "http";
+                    descriptor.tiles = `${protocol}://${host}${basePath}/${manifest.revision}/${descriptor.tiles.replace(/^\.\//, "")}`;
                     bytes = Buffer.from(JSON.stringify(descriptor));
                 } else if (/^\/tile-info\/\d\/\d+\/\d+\/\d+\.json$/.test(path)) {
                     const tile = files!.get(`/${manifest.revision}/elevation/${path.slice(11, -5)}.png`);
