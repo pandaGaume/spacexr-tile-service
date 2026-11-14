@@ -2,8 +2,9 @@ import { resolve } from "node:path";
 import { buildGlobalMars } from "./global-cube";
 import { buildJezeroCtxCorrection, buildRegionalRefinement, MARS_REGIONS } from "./regional-refinement";
 import { createJezeroServer } from "./jezero-server";
+import { buildMoricImagery } from "./imagery/moric-imagery";
 
-const USAGE = `Usage: npm run mars -- global-cube|refine|jezero-refine-ctx-corrected|jezero-serve [--root DIRECTORY] [--region ${MARS_REGIONS.map((region) => region.id).join("|")}] [--port PORT]`;
+const USAGE = `Usage: npm run mars -- global-cube|imagery-moric|refine|jezero-refine-ctx-corrected|jezero-serve [--root DIRECTORY] [--region ${MARS_REGIONS.map((region) => region.id).join("|")}] [--port PORT]`;
 
 const [command, ...args] = process.argv.slice(2);
 let root = process.env.MARS_DATA_ROOT ?? "F:/MarsData";
@@ -18,6 +19,8 @@ for (let index = 0; index < args.length; index += 2) {
 
 if (command === "global-cube") {
     await buildGlobalMars(resolve(root));
+} else if (command === "imagery-moric") {
+    await buildMoricImagery(resolve(root));
 } else if (command === "refine") {
     const regions = regionId ? MARS_REGIONS.filter((region) => region.id === regionId) : MARS_REGIONS;
     if (regions.length === 0) throw new Error(USAGE);

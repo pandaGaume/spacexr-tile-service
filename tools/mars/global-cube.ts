@@ -11,8 +11,8 @@ import { MARS_REGIONS, REGIONAL_SCHEMA } from "./regional-refinement";
 
 const TILE_SIZE = 256;
 const SIDE = TILE_SIZE + 1;
-const MARS_2000: readonly [number, number, number] = [3396190, 3396190, 3376200];
-const FRAME = "IAU_MARS";
+export const MARS_2000: readonly [number, number, number] = [3396190, 3396190, 3376200];
+export const FRAME = "IAU_MARS";
 interface IRegionalTile {
     face: number;
     lod: number;
@@ -196,7 +196,10 @@ function verifyBorders(files: readonly IMarsGlobalFile[]): number {
  * Deepest level down to which every descendant of each tile exists, for the tiles above the global levels. A client
  * reads a declared subtree as complete, so a subtree is declared only as deep as it is.
  */
-function completeDepths(addresses: ReadonlySet<string>, files: readonly IMarsGlobalFile[]): Map<string, number> {
+function completeDepths(
+    addresses: ReadonlySet<string>,
+    files: readonly Pick<IMarsGlobalFile, "address">[],
+): Map<string, number> {
     const depths = new Map<string, number>();
     const sorted = [...files].sort((a, b) => b.address.lod - a.address.lod);
     for (const { address } of sorted) {
@@ -215,7 +218,7 @@ function completeDepths(addresses: ReadonlySet<string>, files: readonly IMarsGlo
 }
 
 /** Subtrees of the descriptor: each tile whose complete depth its parent does not already declare. */
-export function marsSubtrees(files: readonly IMarsGlobalFile[], globalMaxLOD: number) {
+export function marsSubtrees(files: readonly Pick<IMarsGlobalFile, "address">[], globalMaxLOD: number) {
     const regional = files.filter((file) => file.address.lod > globalMaxLOD);
     const addresses = new Set(regional.map((file) => key(file.address)));
     const depths = completeDepths(addresses, regional);

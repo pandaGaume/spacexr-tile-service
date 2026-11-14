@@ -22,7 +22,7 @@ Dans `F:/MarsData/Tianwen-1`, deux produits HiRIC de Tianwen-1 (portail CLPDS), 
 
 Ils ajoutent au brief une seconde région, Utopia Planitia (étape 5 bis). Le référentiel vertical du DEM (sphère ou aréoïde) n'est pas écrit dans le `.prj` : il se détermine par comparaison avec MOLA, comme pour Jezero.
 
-Il manque Tianwen-1 MoRIC (en cours de téléchargement), HRSC MC13E, CTX V01 et HiRISE MSR 2025 (extension ouest).
+Tianwen-1 MoRIC est dans `F:/MarsData/Tianwen-1` (GeoTIFF global de 49,4 Go, manifeste source à côté). Il manque HRSC MC13E, CTX V01 et HiRISE MSR 2025 (extension ouest).
 
 Tianwen-1, contrôlé le 13/11/2026 : le HiPS du CDS répond 404 sur `alasky` et ne répond pas sur son miroir `alaskybis`, le CDS signalant une dégradation de ses services depuis un incident de cybersécurité (communication mise à jour le 9 novembre 2026). Sa fiche MocServer répond toujours. Le HiPS (512 px, ordre 7, PNG) n'est de toute façon qu'un rééchantillonnage du produit CLPDS : la source à ingérer est le GeoTIFF d'origine. Le portail CLPDS, atteint par les deux DOI, propose la mosaïque globale en un GeoTIFF de 46 Go (`HX1_GRAS_MoRIC_DOM_076m_Global_00N00E_A.tif`, DOI `..._Global.vA`) ou en 36 feuillets de 2,2 Go environ (`..._D06_15S040E_A.tif`, DOI `..._Charts.vA`). D'après le nommage, Jezero tombe dans le feuillet C07 (0 à 30° N, 60 à 100° E), à confirmer. Le téléchargement passe par le bouton du portail.
 
@@ -61,6 +61,11 @@ Ordres de grandeur : Jezero CTX au niveau 12, environ 5 300 tuiles ; HiRISE au n
 ### 1. POC-1 : Jezero en CTX sur base Tianwen-1
 
 - Base couleur Tianwen-1, niveaux 0 à 8 : d'abord le feuillet de Jezero, puis la mosaïque globale. Viking (niveaux 0 à 6) ne sert que là où Tianwen-1 n'a pas de donnée, comme repli.
+    - Fait pour Jezero (`npm run mars -- imagery-moric`, `tools/mars/imagery/`), révision `d188683b6db90bd111c8` : niveaux 0 à 4 sur toute la planète, 5 à 8 sur l'emprise CTX (77,0 à 78,6° E, 17,6 à 19,3° N), 2 216 tuiles WebP sans perte de 257 échantillons, 129 Mo, 4 387 bords partagés vérifiés.
+    - Lecture de la source : RGB 8 bits, tuilé 128 × 128, LZW, Plate Carrée sur la sphère de 3396190 m, méridien central 0, sans aperçus ; `GDAL_NODATA` vaut 256, hors de la plage 8 bits, donc aucune valeur absente déclarée. Seuls 73 pixels sont noirs dans les trois bandes : MoRIC couvre Mars entière et le repli Viking n'a pas de surface à combler.
+    - Échantillonnage : chaque sommet moyenne la source sur la surface de sa cellule (racine de l'aire de la cellule équi-angulaire au sommet, sur la sphère de la source), dans le niveau de la pyramide de moyennes dont le pixel est le plus grand sans dépasser cette surface. La pyramide se calcule depuis la source par sommes entières exactes, arrondie une seule fois par niveau ; les niveaux 3 à 8 sont gardés sur disque (`derived/tianwen1-moric-76m/`, une lecture parallèle de 18 minutes), les niveaux 0 à 2 se réduisent par fenêtre source au moment des tuiles.
+    - Les sommets sont construits exactement depuis les axes de leur face, comme pour l'imagerie lunaire : deux faces donnent à un sommet partagé les mêmes bits, donc la même empreinte et la même couleur.
+    - Écart de chaque tuile à son parent aux échantillons communs (plus grand écart des trois canaux) : médiane 1, 95e centile de 2 à 5 selon le niveau.
 - CTX 5 m sur Jezero jusqu'au niveau 12, en luminance seule, fondu dans la base sur un pixel de la source inférieure, comme la cascade d'élévation ; une tuile sans pixel CTX n'est pas écrite.
 - `imagery.json` dans la révision globale, WebP 256 px, sous-arbres aussi profonds que la donnée, comme `elevation.json`.
 - Vérifications de construction : bords partagés, comparaison de chaque tuile avec son parent, couverture.

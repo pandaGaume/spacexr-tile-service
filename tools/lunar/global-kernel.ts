@@ -160,8 +160,16 @@ export function globalFileKey(kind: IGlobalFile["kind"], address: ITileAddress):
     return `${kind}/${address.face ?? 0}/${address.lod}/${address.x}/${address.y}`;
 }
 
-/** Verify every shared border, including turned/reversed face junctions, once per channel and level. */
-export function verifyGlobalBorders(files: readonly IGlobalFile[]): number {
+/**
+ * Verify every shared border, including turned/reversed face junctions, once per channel and level.
+ *
+ * @param requireNeighbors - Whether every tile must have its four neighbours, as in a complete level; a regional set
+ * checks only the borders it holds.
+ */
+export function verifyGlobalBorders(
+    files: readonly Pick<IGlobalFile, "kind" | "address" | "borders">[],
+    requireNeighbors = true,
+): number {
     const map = new Map(files.map((file) => [globalFileKey(file.kind, file.address), file]));
     if (map.size !== files.length) throw new Error("Duplicate generated tile");
     const edges = [TileNeighbor.N, TileNeighbor.E, TileNeighbor.S, TileNeighbor.W] as const;
@@ -175,7 +183,10 @@ export function verifyGlobalBorders(files: readonly IGlobalFile[]): number {
             const neighborKey = globalFileKey(file.kind, neighbor.address),
                 key = globalFileKey(file.kind, address);
             const other = map.get(neighborKey);
-            if (!other) throw new Error(`Missing neighbor ${neighborKey}`);
+            if (!other) {
+                if (requireNeighbors) throw new Error(`Missing neighbor ${neighborKey}`);
+                continue;
+            }
             if (key >= neighborKey) continue;
             const boundary =
                 edgeIndex === 0
