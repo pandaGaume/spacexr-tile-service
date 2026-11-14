@@ -73,7 +73,8 @@ async function walk(directory: string): Promise<string[]> {
     const output: string[] = [];
     for (const entry of await readdir(directory, { withFileTypes: true })) {
         const path = resolve(directory, entry.name);
-        if (entry.isDirectory()) output.push(...(await walk(path)));
+        // A spread call puts every element on the stack: a directory of 500,000 tiles exceeds it.
+        if (entry.isDirectory()) for (const file of await walk(path)) output.push(file);
         else if (entry.isFile()) output.push(path);
     }
     return output;
