@@ -111,40 +111,57 @@ export function pixelBox(geometry: IPlateCarree, footprint: IVertexFootprint, ma
 }
 
 /**
+ * Pyramid windows that hold the pixels a sampler reads: the window of level `k` holding a column of that level, or
+ * `undefined` when none does.
+ */
+export type LevelLookup = (k: number, column: number) => IRgbLevel | undefined;
+
+/** A lookup over whole levels, or over windows that each hold the whole width a tile needs. */
+export function levelsLookup(levels: ReadonlyMap<number, IRgbLevel>): LevelLookup {
+    return (k) => levels.get(k);
+}
+
+/**
  * Samples the `257 x 257` RGB vertices of a cube tile from area pyramid windows: each vertex is the mean of the source
  * over its footprint, every pixel weighted by the part of it the footprint covers.
  *
- * @param levels - Windows by level; each must hold every pixel the tile needs at that level.
- * @throws Error When a footprint needs a level or a pixel the windows do not hold.
+ * @param levelAt - The windows; each pixel a footprint needs must be in the window returned for its column.
+ * @throws Error When a footprint needs a pixel the windows do not hold.
  */
 export function sampleTile(
     address: ITileAddress,
     geometry: IPlateCarree,
-    levels: ReadonlyMap<number, IRgbLevel>,
+    levelAt: LevelLookup,
     maxK: number,
 ): Uint8Array {
     const rgb = new Uint8Array(SIDE * SIDE * 3);
     forEachVertex(address, geometry.sphereRadius, (index, footprint) => {
         const box = pixelBox(geometry, footprint, maxK);
-        const level = levels.get(box.k);
-        if (!level)
-            throw new Error(`Tile ${address.face}/${address.lod}/${address.x}/${address.y} needs level ${box.k}.`);
         let red = 0,
             green = 0,
             blue = 0,
             total = 0;
+        let level: IRgbLevel | undefined;
         for (let row = Math.floor(box.top); row < box.bottom; row++) {
             const weightY = Math.min(row + 1, box.bottom) - Math.max(row, box.top);
-            const localRow = row - level.row0;
-            if (localRow < 0 || localRow >= level.rows)
-                throw new Error(`Row ${row} of level ${box.k} is outside its window.`);
             for (const [west, east] of box.spans)
                 for (let column = Math.floor(west); column < east; column++) {
                     const weight = weightY * (Math.min(column + 1, east) - Math.max(column, west));
                     if (weight <= 0) continue;
-                    const localColumn = column - level.col0;
-                    if (localColumn < 0 || localColumn >= level.cols)
-                        throw new Error(`Column ${column} of level ${box.k} is outside its window.`);
+                    if (!level || column < level.col0 || column >= level.col0 + level.cols)
+                        level = levelAt(box.k, column);
+                    const localRow = row - (level?.row0 ?? 0),
+                        localColumn = column - (level?.col0 ?? 0);
+                    if (
+                        !level ||
+                        localRow < 0 ||
+                        localRow >= level.rows ||
+                        localColumn < 0 ||
+                        localColumn >= level.cols
+                    )
+                        throw new Error(
+                            `Tile ${address.face}/${address.lod}/${address.x}/${address.y} needs pixel ${column}, ${row} of level ${box.k}.`,
+                        );
                     const i = (localRow * level.cols + localColumn) * 3;
                     red += level.data[i]! * weight;
                     green += level.data[i + 1]! * weight;
@@ -159,39 +176,51 @@ export function sampleTile(
     return rgb;
 }
 
+/** Source columns per block of {@link sourceBlocks}. */
+export const SOURCE_BLOCK = 256;
+
 /**
- * Level 0 rows and columns that the footprints of `addresses` need, for every level up to `maxK`, aligned on blocks of
- * `2^alignK` and clamped to the raster. `columns` is `undefined` when the footprints cross the seam or a pole: the
- * whole rows are then needed.
+ * Level 0 windows that hold every pixel the footprints of `addresses` need, at every level up to `maxK`: one per block
+ * of {@link SOURCE_BLOCK} columns that a footprint reaches, with the rows needed in that block, aligned on `2^alignK`
+ * and clamped to the raster. Tiles across the seam or near a pole read only the blocks and rows they need.
  */
-export function sourceWindow(
+export function sourceBlocks(
     addresses: readonly ITileAddress[],
     geometry: IPlateCarree,
     maxK: number,
     alignK: number,
-): { row0: number; rows: number; col0: number; cols: number } {
-    let top = Infinity,
-        bottom = -Infinity,
-        west = Infinity,
-        east = -Infinity,
-        wholeRows = false;
+): Array<{ row0: number; rows: number; col0: number; cols: number }> {
+    const count = Math.ceil(geometry.width / SOURCE_BLOCK);
+    const top = new Float64Array(count).fill(Infinity),
+        bottom = new Float64Array(count).fill(-Infinity);
     for (const address of addresses)
         forEachVertex(address, geometry.sphereRadius, (_, footprint) => {
             const box = pixelBox(geometry, footprint, maxK);
             const scale = 2 ** box.k;
-            top = Math.min(top, Math.floor(box.top) * scale);
-            bottom = Math.max(bottom, Math.ceil(box.bottom) * scale);
-            if (box.wholeRow || box.spans.length !== 1) wholeRows = true;
-            for (const [w, e] of box.spans) {
-                west = Math.min(west, Math.floor(w) * scale);
-                east = Math.max(east, Math.ceil(e) * scale);
+            const rowTop = Math.floor(box.top) * scale,
+                rowBottom = Math.ceil(box.bottom) * scale;
+            for (const [west, east] of box.spans) {
+                const first = Math.floor((Math.floor(west) * scale) / SOURCE_BLOCK);
+                const last = Math.min(count - 1, Math.floor((Math.ceil(east) * scale - 1) / SOURCE_BLOCK));
+                for (let block = first; block <= last; block++) {
+                    if (rowTop < top[block]!) top[block] = rowTop;
+                    if (rowBottom > bottom[block]!) bottom[block] = rowBottom;
+                }
             }
         });
-    const block = 2 ** alignK;
-    const row0 = Math.floor(top / block) * block;
-    const rowEnd = Math.min(geometry.height, Math.ceil(bottom / block) * block);
-    if (wholeRows) return { row0, rows: rowEnd - row0, col0: 0, cols: geometry.width };
-    const col0 = Math.floor(west / block) * block;
-    const colEnd = Math.min(geometry.width, Math.ceil(east / block) * block);
-    return { row0, rows: rowEnd - row0, col0, cols: colEnd - col0 };
+    const align = 2 ** alignK;
+    const windows = [];
+    for (let block = 0; block < count; block++) {
+        if (top[block] === Infinity) continue;
+        const row0 = Math.floor(top[block]! / align) * align;
+        const rowEnd = Math.min(geometry.height, Math.ceil(bottom[block]! / align) * align);
+        const col0 = block * SOURCE_BLOCK;
+        windows.push({ row0, rows: rowEnd - row0, col0, cols: Math.min(geometry.width, col0 + SOURCE_BLOCK) - col0 });
+    }
+    return windows;
+}
+
+/** A lookup over the reduced windows of {@link sourceBlocks}, keyed by block. */
+export function blocksLookup(blocks: ReadonlyMap<number, ReadonlyMap<number, IRgbLevel>>): LevelLookup {
+    return (k, column) => blocks.get(k)?.get(Math.floor((column * 2 ** k) / SOURCE_BLOCK));
 }

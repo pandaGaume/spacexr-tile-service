@@ -210,16 +210,18 @@ async function collectMarsGlobal(
         status: string;
         revision: string;
         files: Array<{ path: string; bytes: number }>;
+        imagery?: { files: Array<{ path: string; bytes: number }> };
     };
     if (manifest.schema !== "mars-global/1" || manifest.status !== "verified" || manifest.revision !== pointer.revision)
         throw new Error("The current Mars publication is not verified.");
-    const expected = new Map(manifest.files.map((file) => [file.path, file.bytes]));
+    const listed = [...manifest.files, ...(manifest.imagery?.files ?? [])];
+    const expected = new Map(listed.map((file) => [file.path, file.bytes]));
     for (const file of await walk(directory)) {
         const datasetPath = toKey(relative(directory, file));
         await addObject(objects, `cube/mars/${toKey(relative(root, file))}`, file, expected.get(datasetPath));
     }
     await addObject(objects, "cube/mars/catalog/latest-global.json", pointerPath);
-    return { revision: pointer.revision, tiles: manifest.files.length };
+    return { revision: pointer.revision, tiles: listed.length };
 }
 
 async function uploadOne(baseUrl: string, token: string, object: IObject): Promise<void> {

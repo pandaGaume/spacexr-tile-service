@@ -1,16 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { availableParallelism } from "node:os";
+import { mkdir, rm, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import sharp from "sharp";
-import { fromFile } from "geotiff";
+import { Worker } from "node:worker_threads";
 import type { ITileAddress } from "@spacexr/tiles/addressing";
 import { cubeTileOfDirection } from "@spacexr/tiles/cube";
 import { planetocentricDirection } from "@spacexr/tiles/surface";
-import { borderHashes, verifyGlobalBorders } from "../../lunar/global-kernel";
-import { sha256, storagePath, writeJson } from "../../lunar/storage";
+import { verifyGlobalBorders } from "../../lunar/global-kernel";
+import { sha256, storagePath, renameDirectory, writeJson } from "../../lunar/storage";
 import { FRAME, MARS_2000, marsSubtrees } from "../global-cube";
-import { reduceWindow, type IRgbLevel } from "./area-pyramid";
-import { forEachVertex, pixelBox, sampleTile, sourceWindow, TILE_SIZE } from "./cube-area-sampler";
+import type { IRgbLevel } from "./area-pyramid";
+import { forEachVertex, levelsLookup, pixelBox, sampleTile, TILE_SIZE } from "./cube-area-sampler";
+import {
+    histogramSummary,
+    imageryTileKey,
+    parentHistogram,
+    writeImageryTile,
+    type IMarsImageryFile,
+    type IUnitResult,
+    type IUnitWorkerData,
+} from "./imagery-units";
 import { MORIC, moricSourceManifest, type IPlateCarree } from "./moric";
 import { loadPyramidLevel, moricPyramid, PYRAMID_MAX_K, PYRAMID_MIN_K } from "./moric-pyramid";
 
@@ -27,17 +36,6 @@ export interface IImageryWindow {
 export const MORIC_WINDOWS: readonly IImageryWindow[] = [
     { id: "jezero", west: 77.0, east: 78.6, south: 17.6, north: 19.3 },
 ];
-
-/** One imagery tile of a Mars imagery revision. */
-export interface IMarsImageryFile {
-    kind: "imagery";
-    address: { face: number; lod: number; x: number; y: number };
-    path: string;
-    bytes: number;
-    sha256: string;
-    borders: string[];
-    source: string;
-}
 
 /** Manifest of a Mars imagery revision. */
 export interface IMarsImageryManifest {
@@ -59,7 +57,8 @@ export interface IMarsImageryManifest {
         resolutionMetres: number;
         minLOD: number;
         maxLOD: number;
-        windows: IImageryWindow[];
+        /** `global`, or the windows below the global levels. */
+        coverage: "global" | IImageryWindow[];
         tiles: number;
     }>;
     /**
@@ -68,12 +67,11 @@ export interface IMarsImageryManifest {
      * measures the detail a level adds; a misplaced or shifted tile shows as an outlier.
      */
     parentDifference: Array<{ lod: number; median: number; p95: number; max: number }>;
+    /** Tiles, without their border hashes. */
     files: IMarsImageryFile[];
     sharedBordersVerified: number;
     bytes: number;
 }
-
-const tileKey = ({ face, lod, x, y }: ITileAddress): string => `${face}/${lod}/${x}/${y}`;
 
 /** Smallest pyramid level a vertex of `lod` reads, over every vertex of a face. */
 function minimumLevel(geometry: IPlateCarree, lod: number): number {
@@ -102,35 +100,77 @@ function windowTiles(window: IImageryWindow, lod: number): ITileAddress[] {
                 planetocentricDirection(Math.min(latitude, window.north), Math.min(longitude, window.east)),
                 lod,
             );
-            tiles.set(tileKey(address), address);
+            tiles.set(imageryTileKey(address), address);
         }
     return [...tiles.values()];
 }
 
-function descendants(root: ITileAddress, maxLOD: number): ITileAddress[] {
-    const tiles: ITileAddress[] = [root];
-    for (let i = 0; i < tiles.length; i++) {
-        const { face, lod, x, y } = tiles[i]!;
-        if (lod < maxLOD)
-            for (let child = 0; child < 4; child++)
-                tiles.push({ face, lod: lod + 1, x: 2 * x + (child & 1), y: 2 * y + (child >> 1) });
-    }
+/** Every tile of a level, on the six faces. */
+function levelTiles(lod: number): ITileAddress[] {
+    const tiles: ITileAddress[] = [];
+    for (let face = 0; face < 6; face++)
+        for (let y = 0; y < 2 ** lod; y++) for (let x = 0; x < 2 ** lod; x++) tiles.push({ face, lod, x, y });
     return tiles;
 }
 
-function percentile(sorted: Uint8Array | number[], p: number): number {
-    return sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]! : 0;
+/** Builds the units in parallel workers; each returns its tiles and the histograms of their parent differences. */
+async function buildUnits(
+    units: readonly ITileAddress[],
+    workerData: IUnitWorkerData,
+    onUnit: (result: IUnitResult) => void,
+): Promise<void> {
+    const workers: Worker[] = [];
+    let next = 0,
+        completed = 0;
+    const started = Date.now();
+    try {
+        await new Promise<void>((accept, reject) => {
+            if (units.length === 0) return accept();
+            const count = Math.min(units.length, Math.max(1, availableParallelism() - 2));
+            for (let i = 0; i < count; i++) {
+                const worker = new Worker(new URL("./moric-unit-worker.mjs", import.meta.url), {
+                    workerData,
+                    execArgv: [],
+                });
+                workers.push(worker);
+                worker.on("error", reject);
+                worker.on("exit", (code) => {
+                    if (code && completed < units.length) reject(new Error(`Imagery worker exited with ${code}`));
+                });
+                worker.on("message", (message: { type: string; result?: IUnitResult; message?: string }) => {
+                    if (message.type === "failure") return reject(new Error(message.message));
+                    if (message.type === "unit") {
+                        onUnit(message.result!);
+                        completed++;
+                        if (completed % 64 === 0 || completed === units.length) {
+                            const seconds = (Date.now() - started) / 1000;
+                            console.log(
+                                `Units: ${completed}/${units.length}, ${seconds.toFixed(0)} s, about ` +
+                                    `${((seconds / completed) * (units.length - completed)).toFixed(0)} s left.`,
+                            );
+                        }
+                        if (completed === units.length) return accept();
+                    }
+                    if (next < units.length) worker.postMessage(units[next++]);
+                });
+            }
+        });
+    } finally {
+        await Promise.all(workers.map((worker) => worker.terminate()));
+    }
 }
 
 /**
  * Builds a Mars imagery revision from Tianwen-1 MoRIC: every tile of the levels whose footprints the stored pyramid
- * holds, then, below them, every tile down to the deepest level of the source inside each window. Each sample is the
- * area mean of the source over its cell. Writes `datasets/mars/imagery-<revision>/` with `imagery.json` and its
- * manifest, then `catalog/latest-imagery.json`.
+ * holds, then, below them, every tile down to the deepest level of the source, over the whole planet or inside windows.
+ * Each sample is the area mean of the source over its cell. Writes `datasets/mars/imagery-<revision>/` with
+ * `imagery.json` and its manifest, then `catalog/latest-imagery.json`.
+ *
+ * @param coverage - `global`, or the windows to build below the global levels.
  */
 export async function buildMoricImagery(
     root: string,
-    windows: readonly IImageryWindow[] = MORIC_WINDOWS,
+    coverage: "global" | readonly IImageryWindow[] = MORIC_WINDOWS,
 ): Promise<string> {
     const source = await moricSourceManifest(root);
     const geometry = source.geometry;
@@ -138,116 +178,94 @@ export async function buildMoricImagery(
     const deepest = deepestLevel(geometry);
     let globalMaxLOD = 0;
     while (globalMaxLOD < deepest && minimumLevel(geometry, globalMaxLOD + 1) >= PYRAMID_MIN_K) globalMaxLOD++;
+    const units =
+        coverage === "global"
+            ? levelTiles(globalMaxLOD + 1)
+            : [
+                  ...new Map(
+                      coverage
+                          .flatMap((window) => windowTiles(window, globalMaxLOD + 1))
+                          .map((address) => [imageryTileKey(address), address]),
+                  ).values(),
+              ];
     console.log(
-        `MoRIC: levels 0-${globalMaxLOD} everywhere, ${globalMaxLOD + 1}-${deepest} in ${windows.map((w) => w.id).join(", ")}.`,
+        `MoRIC: levels 0-${globalMaxLOD} everywhere, ${globalMaxLOD + 1}-${deepest} ` +
+            `${coverage === "global" ? "everywhere" : `in ${coverage.map((w) => w.id).join(", ")}`}, ${units.length} units.`,
     );
 
     const work = storagePath(root, `work/mars-imagery-${randomUUID()}`);
     const files: IMarsImageryFile[] = [];
-    const rgbs = new Map<string, Uint8Array>();
-    const write = async (address: ITileAddress, rgb: Uint8Array): Promise<void> => {
-        const bytes = await sharp(rgb, { raw: { width: TILE_SIZE + 1, height: TILE_SIZE + 1, channels: 3 } })
-            .webp({ lossless: true, effort: 0 })
-            .toBuffer();
-        const path = `imagery/${tileKey(address)}.webp`;
-        const target = resolve(work, path);
-        await mkdir(dirname(target), { recursive: true });
-        await writeFile(target, bytes);
-        files.push({
-            kind: "imagery",
-            address: { face: address.face ?? 0, lod: address.lod, x: address.x, y: address.y },
-            path,
-            bytes: bytes.length,
-            sha256: sha256(bytes),
-            borders: borderHashes(rgb, 3, TILE_SIZE + 1),
-            source: MORIC.id,
-        });
-        rgbs.set(tileKey(address), rgb);
+    const histograms = new Map<number, number[]>();
+    const addHistograms = (byLevel: Record<number, number[]>): void => {
+        for (const [lod, counts] of Object.entries(byLevel)) {
+            const total = histograms.get(Number(lod)) ?? new Array<number>(256).fill(0);
+            counts.forEach((count, value) => (total[value]! += count));
+            histograms.set(Number(lod), total);
+        }
     };
+    let built = false;
     try {
         const pyramid = new Map<number, IRgbLevel>();
         for (let k = PYRAMID_MIN_K; k <= PYRAMID_MAX_K; k++) pyramid.set(k, await loadPyramidLevel(root, source, k));
+        const levelAt = levelsLookup(pyramid);
+        const rgbs = new Map<string, Uint8Array>();
         for (let lod = 0; lod <= globalMaxLOD; lod++) {
-            const pending: Promise<void>[] = [];
-            for (let face = 0; face < 6; face++)
-                for (let y = 0; y < 2 ** lod; y++)
-                    for (let x = 0; x < 2 ** lod; x++) {
-                        const address = { face, lod, x, y };
-                        pending.push(write(address, sampleTile(address, geometry, pyramid, PYRAMID_MAX_K)));
-                    }
-            await Promise.all(pending);
-            console.log(`Level ${lod}: ${6 * 4 ** lod} tiles.`);
-        }
-        pyramid.clear();
-
-        const image = await (await fromFile(storagePath(root, MORIC.file))).getImage(0);
-        const taken = new Set(files.map((file) => tileKey(file.address)));
-        for (const window of windows)
-            for (const unit of windowTiles(window, globalMaxLOD + 1)) {
-                const tiles = descendants(unit, deepest).filter((address) => !taken.has(tileKey(address)));
-                if (tiles.length === 0) continue;
-                const area = sourceWindow(tiles, geometry, PYRAMID_MAX_K, PYRAMID_MIN_K);
-                const data = (await image.readRasters({
-                    window: [area.col0, area.row0, area.col0 + area.cols, area.row0 + area.rows],
-                    interleave: true,
-                })) as unknown as Uint8Array;
-                const base: IRgbLevel = { k: 0, ...area, data };
-                const levels = new Map<number, IRgbLevel>([
-                    [0, base],
-                    ...reduceWindow(geometry, base, PYRAMID_MIN_K).map((level) => [level.k, level] as const),
-                ]);
-                const pending: Promise<void>[] = [];
-                for (const address of tiles) {
-                    pending.push(write(address, sampleTile(address, geometry, levels, PYRAMID_MIN_K)));
-                    taken.add(tileKey(address));
-                }
-                await Promise.all(pending);
-                console.log(
-                    `${window.id}: tile ${tileKey(unit)} and ${tiles.length - 1} below it, from a ${area.cols} x ${area.rows} source window.`,
-                );
+            const tiles = levelTiles(lod);
+            const histogram = new Array<number>(256).fill(0);
+            await Promise.all(
+                tiles.map(async (address) => {
+                    const rgb = sampleTile(address, geometry, levelAt, PYRAMID_MAX_K);
+                    rgbs.set(imageryTileKey(address), rgb);
+                    files.push(await writeImageryTile(work, address, rgb, MORIC.id));
+                }),
+            );
+            if (lod > 0) {
+                for (const address of tiles)
+                    parentHistogram(
+                        address,
+                        rgbs.get(imageryTileKey(address))!,
+                        rgbs.get(imageryTileKey({ ...address, lod: lod - 1, x: address.x >> 1, y: address.y >> 1 }))!,
+                        histogram,
+                    );
+                addHistograms({ [lod]: histogram });
             }
-
-        const sharedBordersVerified = verifyGlobalBorders(files, false);
-        const parentDifference: IMarsImageryManifest["parentDifference"] = [];
-        for (let lod = 1; lod <= deepest; lod++) {
-            const differences: number[] = [];
-            for (const file of files) {
-                if (file.address.lod !== lod) continue;
-                const { face, x, y } = file.address;
-                const parent = rgbs.get(tileKey({ face, lod: lod - 1, x: x >> 1, y: y >> 1 }));
-                if (!parent) throw new Error(`${file.path} has no parent tile.`);
-                const child = rgbs.get(tileKey(file.address))!;
-                const offsetX = (x & 1) * (TILE_SIZE / 2),
-                    offsetY = (y & 1) * (TILE_SIZE / 2);
-                for (let row = 0; row <= TILE_SIZE; row += 2)
-                    for (let column = 0; column <= TILE_SIZE; column += 2) {
-                        const c = (row * (TILE_SIZE + 1) + column) * 3;
-                        const p = ((offsetY + row / 2) * (TILE_SIZE + 1) + offsetX + column / 2) * 3;
-                        differences.push(
-                            Math.max(
-                                Math.abs(child[c]! - parent[p]!),
-                                Math.abs(child[c + 1]! - parent[p + 1]!),
-                                Math.abs(child[c + 2]! - parent[p + 2]!),
-                            ),
-                        );
-                    }
-            }
-            const sorted = Uint8Array.from(differences).sort();
-            parentDifference.push({
-                lod,
-                median: percentile(sorted, 0.5),
-                p95: percentile(sorted, 0.95),
-                max: sorted[sorted.length - 1] ?? 0,
-            });
+            console.log(`Level ${lod}: ${tiles.length} tiles.`);
         }
         rgbs.clear();
+        pyramid.clear();
+
+        await buildUnits(
+            units,
+            {
+                file: storagePath(root, MORIC.file),
+                geometry,
+                work,
+                source: MORIC.id,
+                maxLOD: deepest,
+                alignK: PYRAMID_MIN_K,
+            },
+            (result) => {
+                files.push(...result.files);
+                addHistograms(result.histograms);
+            },
+        );
+
+        const sharedBordersVerified = verifyGlobalBorders(
+            files as Array<IMarsImageryFile & { borders: string[] }>,
+            coverage === "global",
+        );
+        for (const file of files) delete file.borders;
+        const parentDifference = [...histograms.entries()]
+            .sort(([a], [b]) => a - b)
+            .map(([lod, histogram]) => ({ lod, ...histogramSummary(histogram) }));
 
         files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
         const revision = sha256(Buffer.from(files.map((file) => `${file.path} ${file.sha256}`).join("\n"))).slice(
             0,
             20,
         );
-        const subtrees = marsSubtrees(files, globalMaxLOD);
+        const maxLOD = coverage === "global" ? deepest : globalMaxLOD;
+        const subtrees = coverage === "global" ? [] : marsSubtrees(files, globalMaxLOD);
         await writeJson(resolve(work, "imagery.json"), {
             scheme: "spacexr-cube-equiangular/1",
             body: "Mars",
@@ -257,7 +275,7 @@ export async function buildMoricImagery(
             encoding: "webp",
             tileSize: TILE_SIZE,
             minLOD: 0,
-            maxLOD: globalMaxLOD,
+            maxLOD,
             subtrees,
             tiles: "./imagery/{face}/{z}/{x}/{y}.webp",
         });
@@ -265,7 +283,7 @@ export async function buildMoricImagery(
             schema: "mars-imagery/1",
             revision,
             status: "verified",
-            maxLOD: globalMaxLOD,
+            maxLOD,
             tileSize: TILE_SIZE,
             frame: FRAME,
             referenceRadii: MARS_2000,
@@ -275,12 +293,12 @@ export async function buildMoricImagery(
                     id: MORIC.id,
                     url: source.url,
                     credit: source.credit,
-                    rights: source.rights,
+                    rights: MORIC.rights,
                     sha256: source.sha256,
                     resolutionMetres: geometry.pixelMetres,
                     minLOD: 0,
                     maxLOD: deepest,
-                    windows: [...windows],
+                    coverage: coverage === "global" ? "global" : [...coverage],
                     tiles: files.length,
                 },
             ],
@@ -290,6 +308,7 @@ export async function buildMoricImagery(
             bytes: files.reduce((sum, file) => sum + file.bytes, 0),
         };
         await writeJson(resolve(work, "manifest.json"), manifest);
+        built = true;
 
         const directory = `datasets/mars/imagery-${revision}`;
         const target = storagePath(root, directory);
@@ -298,21 +317,25 @@ export async function buildMoricImagery(
                 () => true,
                 () => false,
             )
-        )
+        ) {
             console.log(`Revision ${revision} already exists; nothing written.`);
-        else {
+            await rm(work, { recursive: true, force: true });
+        } else {
             await mkdir(dirname(target), { recursive: true });
-            await rename(work, target);
+            await renameDirectory(work, target);
         }
         await writeJson(storagePath(root, "catalog/latest-imagery.json"), { directory, revision });
         console.log(
             `Mars imagery ${revision}: ${files.length} tiles, ${subtrees.length} subtrees, ` +
-                `${sharedBordersVerified} shared borders verified, ${(manifest.bytes / 1e6).toFixed(1)} MB.`,
+                `${sharedBordersVerified} shared borders verified, ${(manifest.bytes / 1e9).toFixed(2)} GB.`,
         );
         for (const { lod, median, p95, max } of parentDifference)
             console.log(`  level ${lod} against its parent: median ${median}, p95 ${p95}, max ${max}`);
         return revision;
-    } finally {
-        await rm(work, { recursive: true, force: true });
+    } catch (error) {
+        // Tiles already built are kept: a failed rename leaves them to be moved by hand.
+        if (built) console.error(`The finished revision stays in ${work}.`);
+        else await rm(work, { recursive: true, force: true });
+        throw error;
     }
 }

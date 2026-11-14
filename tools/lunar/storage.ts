@@ -30,6 +30,25 @@ export async function hashFile(file: string): Promise<string> {
     return hash.digest("hex");
 }
 
+/**
+ * Renames a finished work directory to its final place. Windows refuses to rename a directory while another process
+ * holds one of its files, as an antivirus does while it scans files just written: like graceful-fs, the rename is
+ * retried on `EPERM`, `EACCES` and `EBUSY` for up to a minute.
+ */
+export async function renameDirectory(from: string, to: string): Promise<void> {
+    const started = Date.now();
+    for (let delay = 100; ; delay = Math.min(2 * delay, 5000)) {
+        try {
+            await rename(from, to);
+            return;
+        } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (!["EPERM", "EACCES", "EBUSY"].includes(code ?? "") || Date.now() - started > 60000) throw error;
+            await new Promise((accept) => setTimeout(accept, delay));
+        }
+    }
+}
+
 /** Commit a complete file by rename, leaving an existing result intact on write failure. */
 export async function atomicWrite(file: string, bytes: Uint8Array | string): Promise<void> {
     await mkdir(dirname(file), { recursive: true });

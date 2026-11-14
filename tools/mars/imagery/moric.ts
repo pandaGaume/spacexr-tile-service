@@ -11,7 +11,7 @@ export const MORIC = {
     file: "Tianwen-1/HX1_GRAS_MoRIC_DOM_076m_Global_00N00E_A.tif",
     url: "https://moon.bao.ac.cn/WEBDATA/HX1ROLL/HX1/MoRIC/GLOBAL/2023-11/HX1_GRAS_MoRIC_DOM_076m_Global_00N00E_A.tif",
     credit: "J. Liu, X. Ren, W. Yan et al., A 76-m per pixel global color image dataset and map of Mars by Tianwen-1, Science Bulletin, https://doi.org/10.1016/j.scib.2024.04.045",
-    rights: "Copyright NAOC/GRAS (CLPDS); the citation above is required; redistribution terms to be validated before publication.",
+    rights: "Public data of the China Lunar and Planetary Data Release System (CLPDS), copyright NAOC/GRAS; the citation above is required wherever the mosaic is used.",
 } as const;
 
 /**
@@ -87,7 +87,12 @@ export async function moricSourceManifest(root: string): Promise<IMoricSourceMan
     const { size } = await stat(file);
     try {
         const previous = JSON.parse(await readFile(manifestPath, "utf8")) as IMoricSourceManifest;
-        if (previous.schema === "mars-source/1" && previous.bytes === size) return previous;
+        if (previous.schema === "mars-source/1" && previous.bytes === size) {
+            // The hash stands while the file keeps its size; its description follows these tools.
+            const current = { ...previous, url: MORIC.url, credit: MORIC.credit, rights: MORIC.rights };
+            if (JSON.stringify(current) !== JSON.stringify(previous)) await writeJson(manifestPath, current);
+            return current;
+        }
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }

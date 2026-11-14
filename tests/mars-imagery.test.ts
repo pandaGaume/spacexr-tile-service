@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { borderHashes, verifyGlobalBorders } from "../tools/lunar/global-kernel";
 import { reduceWindow, type IRgbLevel } from "../tools/mars/imagery/area-pyramid";
-import { sampleTile, sourceWindow, TILE_SIZE } from "../tools/mars/imagery/cube-area-sampler";
+import {
+    levelsLookup,
+    sampleTile,
+    sourceBlocks,
+    SOURCE_BLOCK,
+    TILE_SIZE,
+} from "../tools/mars/imagery/cube-area-sampler";
 import type { IPlateCarree } from "../tools/mars/imagery/moric";
 
 const RADIUS = 3396190;
@@ -56,7 +62,12 @@ describe("Mars imagery from an area pyramid", () => {
 
     it("samples a uniform source as itself and shares every border of a level, across faces and the seam", () => {
         const uniform = planet((_, __, channel) => 40 + channel);
-        const flat = sampleTile({ face: 4, lod: 0, x: 0, y: 0 }, uniform.geometry, new Map([[0, uniform.base]]), 0);
+        const flat = sampleTile(
+            { face: 4, lod: 0, x: 0, y: 0 },
+            uniform.geometry,
+            levelsLookup(new Map([[0, uniform.base]])),
+            0,
+        );
         expect(new Set(flat.filter((_, i) => i % 3 === 0))).toEqual(new Set([40]));
 
         const { geometry, base } = planet((column, row, channel) => (column + 2 * row + 50 * channel) % 256);
@@ -69,19 +80,18 @@ describe("Mars imagery from an area pyramid", () => {
             for (let y = 0; y < 2; y++)
                 for (let x = 0; x < 2; x++) {
                     const address = { face, lod: 1, x, y };
-                    const rgb = sampleTile(address, geometry, levels, 3);
+                    const rgb = sampleTile(address, geometry, levelsLookup(levels), 3);
                     files.push({ kind: "imagery" as const, address, borders: borderHashes(rgb, 3, TILE_SIZE + 1) });
                 }
         expect(verifyGlobalBorders(files)).toBe(48);
     });
 
-    it("plans a source window that holds every footprint of its tiles", () => {
+    it("plans source blocks that hold every footprint, across the seam and at a pole", () => {
         const { geometry } = planet(() => 0);
-        const window = sourceWindow([{ face: 1, lod: 2, x: 1, y: 1 }], geometry, 0, 2);
-        expect(window.row0 % 4).toBe(0);
-        expect(window.col0 % 4).toBe(0);
-        expect(window.cols).toBeLessThan(geometry.width);
-        const polar = sourceWindow([{ face: 4, lod: 1, x: 0, y: 0 }], geometry, 0, 2);
-        expect(polar).toMatchObject({ col0: 0, cols: geometry.width, row0: 0 });
+        const seam = sourceBlocks([{ face: 2, lod: 1, x: 0, y: 0 }], geometry, 0, 2);
+        expect(seam.every((block) => block.col0 % SOURCE_BLOCK === 0 && block.row0 % 4 === 0)).toBe(true);
+        expect(seam.map((block) => block.col0)).toEqual([0, 256]);
+        const polar = sourceBlocks([{ face: 4, lod: 1, x: 0, y: 0 }], geometry, 0, 2);
+        expect(polar.map((block) => block.row0)).toEqual([0, 0]);
     });
 });

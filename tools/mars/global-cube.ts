@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { copyFile, link, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import sharp from "sharp";
 import { CUBE_FACE_EDGES, cubeTileNeighbor } from "@spacexr/tiles/cube";
 import { TileNeighbor, type ITileAddress } from "@spacexr/tiles/addressing";
 import { borderHashes } from "../lunar/global-kernel";
-import { sha256, storagePath, writeJson } from "../lunar/storage";
+import { renameDirectory, sha256, storagePath, writeJson } from "../lunar/storage";
 import { GlobalMola, MOLA_MAX_LOD } from "./global-mola";
+import type { IMarsImageryFile } from "./imagery/imagery-units";
 import { MARS_REGIONS, REGIONAL_SCHEMA } from "./regional-refinement";
 
 const TILE_SIZE = 256;
@@ -73,9 +74,14 @@ export interface IMarsGlobalManifest {
         resolutionMetres: number;
         url?: string;
         credit?: string;
+        /** Content of the source, elevation when absent. */
+        content?: "imagery";
+        rights?: string;
         tiles: number;
     }>;
     files: IMarsGlobalFile[];
+    /** Imagery of the revision, linked from the imagery revision `npm run mars -- imagery-moric` built last. */
+    imagery?: { revision: string; maxLOD: number; files: IMarsImageryFile[] };
     sharedBordersVerified: number;
     bytes: number;
 }
@@ -240,6 +246,89 @@ async function place(source: string, target: string): Promise<void> {
     await link(source, target).catch(() => copyFile(source, target));
 }
 
+/** Manifest fields of an imagery revision that a global revision reads. */
+interface IImageryRevision {
+    schema: string;
+    status: string;
+    revision: string;
+    maxLOD: number;
+    sources: Array<{
+        id: string;
+        url: string;
+        credit: string;
+        rights: string;
+        resolutionMetres: number;
+        minLOD: number;
+        maxLOD: number;
+        tiles: number;
+    }>;
+    files: IMarsImageryFile[];
+}
+
+/**
+ * Links the tiles of the imagery revision of `catalog/latest-imagery.json` into a global revision being built, each
+ * checked against its manifest, with its `imagery.json` descriptor.
+ *
+ * @returns The imagery and its sources, or `undefined` when no imagery revision was built.
+ */
+async function linkImagery(
+    root: string,
+    work: string,
+): Promise<
+    { imagery: NonNullable<IMarsGlobalManifest["imagery"]>; sources: IMarsGlobalManifest["sources"] } | undefined
+> {
+    let pointer: { directory: string; revision: string };
+    try {
+        pointer = JSON.parse(
+            await readFile(storagePath(root, "catalog/latest-imagery.json"), "utf8"),
+        ) as typeof pointer;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw error;
+    }
+    if (!/^[a-f0-9]{20}$/.test(pointer.revision) || pointer.directory !== `datasets/mars/imagery-${pointer.revision}`)
+        throw new Error("The Mars latest-imagery pointer is invalid.");
+    const manifest = JSON.parse(
+        await readFile(storagePath(root, `${pointer.directory}/manifest.json`), "utf8"),
+    ) as IImageryRevision;
+    if (
+        manifest.schema !== "mars-imagery/1" ||
+        manifest.status !== "verified" ||
+        manifest.revision !== pointer.revision
+    )
+        throw new Error(`The imagery revision ${pointer.revision} is not verified.`);
+    let next = 0;
+    const link = async (): Promise<void> => {
+        while (next < manifest.files.length) {
+            const file = manifest.files[next++]!;
+            const source = storagePath(root, `${pointer.directory}/${file.path}`);
+            const bytes = await readFile(source);
+            if (bytes.length !== file.bytes || sha256(bytes) !== file.sha256)
+                throw new Error(`${file.path} differs from its imagery manifest entry.`);
+            await place(source, resolve(work, file.path));
+        }
+    };
+    await Promise.all(Array.from({ length: 16 }, link));
+    await copyFile(storagePath(root, `${pointer.directory}/imagery.json`), resolve(work, "imagery.json"));
+    console.log(
+        `Imagery ${manifest.revision}: ${manifest.files.length} tiles, levels 0-${manifest.maxLOD} everywhere.`,
+    );
+    return {
+        imagery: { revision: manifest.revision, maxLOD: manifest.maxLOD, files: manifest.files },
+        sources: manifest.sources.map(({ id, url, credit, rights, resolutionMetres, minLOD, maxLOD, tiles }) => ({
+            id,
+            content: "imagery" as const,
+            minLOD,
+            maxLOD,
+            resolutionMetres,
+            url,
+            credit,
+            rights,
+            tiles,
+        })),
+    };
+}
+
 /**
  * Builds an immutable global revision of Mars on the cube index: MOLA MEGR 16 ppd everywhere down to level 4, then the
  * sources of every region of {@link MARS_REGIONS} on their own levels, in one tree with a single URL template. Heights
@@ -265,6 +354,7 @@ export async function buildGlobalMars(root: string): Promise<string> {
     const work = storagePath(root, `work/mars-global-${randomUUID()}`);
     const files: IMarsGlobalFile[] = [];
     const sources: IMarsGlobalManifest["sources"] = [];
+    let built = false;
     try {
         let molaTiles = 0;
         for (let face = 0; face < 6; face++)
@@ -348,10 +438,13 @@ export async function buildGlobalMars(root: string): Promise<string> {
                 );
             }
 
+        const imagery = await linkImagery(root, work);
+        if (imagery) sources.push(...imagery.sources);
         const sharedBordersVerified = verifyBorders(files);
         await compareWithParents(files, work, MOLA_MAX_LOD);
         files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-        const revision = sha256(Buffer.from(files.map((file) => `${file.path} ${file.sha256}`).join("\n"))).slice(
+        const listed = [...files, ...(imagery?.imagery.files ?? [])];
+        const revision = sha256(Buffer.from(listed.map((file) => `${file.path} ${file.sha256}`).join("\n"))).slice(
             0,
             20,
         );
@@ -382,10 +475,12 @@ export async function buildGlobalMars(root: string): Promise<string> {
             createdAt: new Date().toISOString(),
             sources,
             files,
+            ...(imagery ? { imagery: imagery.imagery } : {}),
             sharedBordersVerified,
-            bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+            bytes: listed.reduce((sum, file) => sum + file.bytes, 0),
         };
         await writeJson(resolve(work, "manifest.json"), manifest);
+        built = true;
 
         const directory = `datasets/mars/global-${revision}`;
         const target = storagePath(root, directory);
@@ -396,9 +491,10 @@ export async function buildGlobalMars(root: string): Promise<string> {
             )
         ) {
             console.log(`Revision ${revision} already exists; nothing written.`);
+            await rm(work, { recursive: true, force: true });
         } else {
             await mkdir(dirname(target), { recursive: true });
-            await rename(work, target);
+            await renameDirectory(work, target);
         }
         await writeJson(storagePath(root, "catalog/latest-global.json"), { directory, revision });
         console.log(
@@ -406,7 +502,10 @@ export async function buildGlobalMars(root: string): Promise<string> {
                 `${sharedBordersVerified} shared borders verified, ${(manifest.bytes / 1e6).toFixed(1)} MB.`,
         );
         return revision;
-    } finally {
-        await rm(work, { recursive: true, force: true });
+    } catch (error) {
+        // Tiles already built are kept: a failed rename leaves them to be moved by hand.
+        if (built) console.error(`The finished revision stays in ${work}.`);
+        else await rm(work, { recursive: true, force: true });
+        throw error;
     }
 }
