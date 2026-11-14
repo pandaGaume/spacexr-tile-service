@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
-import { ReferenceSurface, cubeTileDirection, parseCelestialDataset } from "@spacexr/tiles/cube";
+import { cubeTileDirection, parseCelestialDataset } from "@spacexr/tiles/cube";
+import { ReferenceSurface } from "@spacexr/tiles/surface";
 import { CelestialTileSource } from "@spacexr/tiles/cube";
 import {
     atomicWrite,

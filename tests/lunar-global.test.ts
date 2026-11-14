@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import sharp from "sharp";
 import { createHeightGrid, encodeTerrariumGrid } from "@spacexr/dem";
-import { cubeTileDirection, ReferenceSurface } from "@spacexr/tiles/cube";
+import { cubeTileDirection } from "@spacexr/tiles/cube";
+import { ReferenceSurface } from "@spacexr/tiles/surface";
 import {
     borderHashes,
     globalTilePixels,

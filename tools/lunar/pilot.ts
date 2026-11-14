@@ -3,7 +3,8 @@ import sharp from "sharp";
 import { fromArrayBuffer } from "geotiff";
 import { SolarSystemBodies } from "@spacexr/celestial-core/catalog";
 import { createHeightGrid, encodeTerrariumGrid } from "@spacexr/dem";
-import { cubeTileDirection, ReferenceSurface, type ICelestialDataset } from "@spacexr/tiles/cube";
+import { cubeTileDirection, type ICelestialDataset } from "@spacexr/tiles/cube";
+import { ReferenceSurface } from "@spacexr/tiles/surface";
 import type { ITileAddress } from "@spacexr/tiles/addressing";
 import {
     cubeTileSourceTiles,

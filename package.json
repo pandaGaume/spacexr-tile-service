@@ -44,7 +44,7 @@
     "@spacexr/dem": "file:../terrain-core/packages/dem",
     "@spacexr/geodesy": "0.4.0",
     "@spacexr/raster": "file:../terrain-core/packages/raster",
-    "@spacexr/tiles": "file:../3d-tiles-core/node/packages/tiles",
+    "@spacexr/tiles": "file:../spacexr-tiling/packages/tiles",
     "aws4fetch": "1.0.20",
     "geotiff": "3.0.5",
     "gl-matrix": "3.4.4",
