@@ -73,7 +73,8 @@ async function walk(directory: string): Promise<string[]> {
     const output: string[] = [];
     for (const entry of await readdir(directory, { withFileTypes: true })) {
         const path = resolve(directory, entry.name);
-        if (entry.isDirectory()) output.push(...(await walk(path)));
+        // A spread call puts every element on the stack: a directory of 500,000 tiles exceeds it.
+        if (entry.isDirectory()) for (const file of await walk(path)) output.push(file);
         else if (entry.isFile()) output.push(path);
     }
     return output;
@@ -210,16 +211,27 @@ async function collectMarsGlobal(
         status: string;
         revision: string;
         files: Array<{ path: string; bytes: number }>;
+        imagery?: { files: string };
     };
     if (manifest.schema !== "mars-global/1" || manifest.status !== "verified" || manifest.revision !== pointer.revision)
         throw new Error("The current Mars publication is not verified.");
-    const expected = new Map(manifest.files.map((file) => [file.path, file.bytes]));
+    const listed = [...manifest.files];
+    if (manifest.imagery) {
+        // `face/z/x/y bytes sha256` per line, the tile list of the imagery.
+        const list = await readFile(resolve(directory, manifest.imagery.files), "utf8");
+        for (const line of list.split("\n")) {
+            if (!line) continue;
+            const [key, bytes] = line.split(" ");
+            listed.push({ path: `imagery/${key}.webp`, bytes: Number(bytes) });
+        }
+    }
+    const expected = new Map(listed.map((file) => [file.path, file.bytes]));
     for (const file of await walk(directory)) {
         const datasetPath = toKey(relative(directory, file));
         await addObject(objects, `cube/mars/${toKey(relative(root, file))}`, file, expected.get(datasetPath));
     }
     await addObject(objects, "cube/mars/catalog/latest-global.json", pointerPath);
-    return { revision: pointer.revision, tiles: manifest.files.length };
+    return { revision: pointer.revision, tiles: listed.length };
 }
 
 async function uploadOne(baseUrl: string, token: string, object: IObject): Promise<void> {

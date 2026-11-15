@@ -2,22 +2,32 @@ import { resolve } from "node:path";
 import { buildGlobalMars } from "./global-cube";
 import { buildJezeroCtxCorrection, buildRegionalRefinement, MARS_REGIONS } from "./regional-refinement";
 import { createJezeroServer } from "./jezero-server";
+import { buildMoricImagery, MORIC_WINDOWS } from "./imagery/moric-imagery";
 
-const USAGE = `Usage: npm run mars -- global-cube|refine|jezero-refine-ctx-corrected|jezero-serve [--root DIRECTORY] [--region ${MARS_REGIONS.map((region) => region.id).join("|")}] [--port PORT]`;
+const USAGE = `Usage: npm run mars -- global-cube|imagery-moric|refine|jezero-refine-ctx-corrected|jezero-serve [--root DIRECTORY] [--region ${MARS_REGIONS.map((region) => region.id).join("|")}] [--port PORT] [--coverage global|jezero]`;
 
 const [command, ...args] = process.argv.slice(2);
 let root = process.env.MARS_DATA_ROOT ?? "F:/MarsData";
 let regionId: string | undefined;
 let port = 8794;
+let coverage: string | undefined;
 for (let index = 0; index < args.length; index += 2) {
     if (args[index] === "--root" && args[index + 1]) root = args[index + 1]!;
     else if (args[index] === "--region" && args[index + 1]) regionId = args[index + 1]!;
     else if (args[index] === "--port" && args[index + 1]) port = Number(args[index + 1]);
+    else if (args[index] === "--coverage" && args[index + 1]) coverage = args[index + 1]!;
     else throw new Error(USAGE);
 }
 
 if (command === "global-cube") {
     await buildGlobalMars(resolve(root));
+} else if (command === "imagery-moric") {
+    if (coverage === "global") await buildMoricImagery(resolve(root), "global");
+    else {
+        const windows = MORIC_WINDOWS.filter((window) => coverage === undefined || window.id === coverage);
+        if (windows.length === 0) throw new Error(USAGE);
+        await buildMoricImagery(resolve(root), windows);
+    }
 } else if (command === "refine") {
     const regions = regionId ? MARS_REGIONS.filter((region) => region.id === regionId) : MARS_REGIONS;
     if (regions.length === 0) throw new Error(USAGE);
