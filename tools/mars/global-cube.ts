@@ -81,7 +81,14 @@ export interface IMarsGlobalManifest {
     }>;
     files: IMarsGlobalFile[];
     /** Imagery of the revision, linked from the imagery revision `npm run mars -- imagery-moric` built last. */
-    imagery?: { revision: string; maxLOD: number; files: IMarsImageryFile[] };
+    imagery?: {
+        revision: string;
+        maxLOD: number;
+        tiles: number;
+        bytes: number;
+        /** One line per tile, `face/z/x/y bytes sha256`, sorted: a JSON list of half a million tiles would weigh 200 MB. */
+        files: typeof IMAGERY_FILES;
+    };
     sharedBordersVerified: number;
     bytes: number;
 }
@@ -246,6 +253,9 @@ async function place(source: string, target: string): Promise<void> {
     await link(source, target).catch(() => copyFile(source, target));
 }
 
+/** Tile list of the imagery of a global revision, beside its manifest. */
+export const IMAGERY_FILES = "imagery-files.txt";
+
 /** Manifest fields of an imagery revision that a global revision reads. */
 interface IImageryRevision {
     schema: string;
@@ -275,7 +285,12 @@ async function linkImagery(
     root: string,
     work: string,
 ): Promise<
-    { imagery: NonNullable<IMarsGlobalManifest["imagery"]>; sources: IMarsGlobalManifest["sources"] } | undefined
+    | {
+          imagery: NonNullable<IMarsGlobalManifest["imagery"]>;
+          files: IMarsImageryFile[];
+          sources: IMarsGlobalManifest["sources"];
+      }
+    | undefined
 > {
     let pointer: { directory: string; revision: string };
     try {
@@ -310,11 +325,22 @@ async function linkImagery(
     };
     await Promise.all(Array.from({ length: 16 }, link));
     await copyFile(storagePath(root, `${pointer.directory}/imagery.json`), resolve(work, "imagery.json"));
+    const lines = manifest.files
+        .map((file) => `${file.path.replace(/^imagery\//, "").replace(/\.webp$/, "")} ${file.bytes} ${file.sha256}\n`)
+        .sort();
+    await writeFile(resolve(work, IMAGERY_FILES), lines.join(""));
     console.log(
         `Imagery ${manifest.revision}: ${manifest.files.length} tiles, levels 0-${manifest.maxLOD} everywhere.`,
     );
     return {
-        imagery: { revision: manifest.revision, maxLOD: manifest.maxLOD, files: manifest.files },
+        imagery: {
+            revision: manifest.revision,
+            maxLOD: manifest.maxLOD,
+            tiles: manifest.files.length,
+            bytes: manifest.files.reduce((sum, file) => sum + file.bytes, 0),
+            files: IMAGERY_FILES,
+        },
+        files: manifest.files,
         sources: manifest.sources.map(({ id, url, credit, rights, resolutionMetres, minLOD, maxLOD, tiles }) => ({
             id,
             content: "imagery" as const,
@@ -443,7 +469,7 @@ export async function buildGlobalMars(root: string): Promise<string> {
         const sharedBordersVerified = verifyBorders(files);
         await compareWithParents(files, work, MOLA_MAX_LOD);
         files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-        const listed = [...files, ...(imagery?.imagery.files ?? [])];
+        const listed = [...files, ...(imagery?.files ?? [])];
         const revision = sha256(Buffer.from(listed.map((file) => `${file.path} ${file.sha256}`).join("\n"))).slice(
             0,
             20,

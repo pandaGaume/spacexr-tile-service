@@ -211,11 +211,20 @@ async function collectMarsGlobal(
         status: string;
         revision: string;
         files: Array<{ path: string; bytes: number }>;
-        imagery?: { files: Array<{ path: string; bytes: number }> };
+        imagery?: { files: string };
     };
     if (manifest.schema !== "mars-global/1" || manifest.status !== "verified" || manifest.revision !== pointer.revision)
         throw new Error("The current Mars publication is not verified.");
-    const listed = [...manifest.files, ...(manifest.imagery?.files ?? [])];
+    const listed = [...manifest.files];
+    if (manifest.imagery) {
+        // `face/z/x/y bytes sha256` per line, the tile list of the imagery.
+        const list = await readFile(resolve(directory, manifest.imagery.files), "utf8");
+        for (const line of list.split("\n")) {
+            if (!line) continue;
+            const [key, bytes] = line.split(" ");
+            listed.push({ path: `imagery/${key}.webp`, bytes: Number(bytes) });
+        }
+    }
     const expected = new Map(listed.map((file) => [file.path, file.bytes]));
     for (const file of await walk(directory)) {
         const datasetPath = toKey(relative(directory, file));
